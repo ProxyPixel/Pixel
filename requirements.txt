@@ -1,0 +1,7 @@
+discord.py
+Flask
+aiohttp
+aiofiles
+gunicorn
+boto3
+awscli
