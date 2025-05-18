@@ -10,7 +10,7 @@ services:
       python3 main.py
     envVars:
       - key: NEW_BOT_TOKEN
-        fromSecret: NEW_BOT_TOKEN
+        fromEnv: NEW_BOT_TOKEN
       - key: AWS_ACCESS_KEY_ID
         fromEnv: AWS_ACCESS_KEY_ID
       - key: AWS_SECRET_ACCESS_KEY
