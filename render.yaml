@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: Pixel
+    env: python
+    region: virginia 
+    buildCommand: |
+      pip install -r requirements.txt
+    startCommand: |
+      python3 main.py
+    envVars:
+      - key: NEW_BOT_TOKEN
+        fromSecret: NEW_BOT_TOKEN
+    plan: free
+    disk:
+      name: pixel-data
+      mountPath: /data
+    healthCheckPath: "/health"
+    autoDeploy: true
