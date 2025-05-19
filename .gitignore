@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 venv/
 .venv/
 __pycache__/
@@ -6,3 +7,7 @@ __pycache__/
 *.log
 data/
 venv/
+||||||| empty tree
+=======
+/data/*.json
+>>>>>>> 148e586dd485e85a7336569dd4700d06a440eff4
