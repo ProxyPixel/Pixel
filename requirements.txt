@@ -9,3 +9,4 @@ requests
 jsonschema
 pyyaml
 orjson
+python-dotenv

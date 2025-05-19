@@ -2,26 +2,22 @@ services:
   - type: web
     name: Pixel
     env: python
-    region: virginia 
+    region: virginia
     buildCommand: |
       pip install -r requirements.txt
     startCommand: |
-      aws s3 sync s3://pixel-bot-data data/ --region us-east-2
       python3 main.py
     envVars:
-      - key: NEW_BOT_TOKEN
-        fromEnv: NEW_BOT_TOKEN
+      - key: DISCORD_TOKEN
+        sync: false  
       - key: AWS_ACCESS_KEY_ID
-        fromEnv: AWS_ACCESS_KEY_ID
+        sync: false
       - key: AWS_SECRET_ACCESS_KEY
-        fromEnv: AWS_SECRET_ACCESS_KEY
+        sync: false
       - key: AWS_S3_BUCKET
-        fromEnv: AWS_S3_BUCKET
+        sync: false
       - key: AWS_S3_REGION
-        value: us-east-2
+        sync: false
     plan: free
-    disk:
-      name: pixel-data
-      mountPath: /data
     healthCheckPath: "/health"
     autoDeploy: true
