@@ -27,5 +27,5 @@ class ReadyEvent(commands.Cog):
         new_status = random.choice(status_options)
         await self.bot.change_presence(activity=discord.Game(name=new_status))
 
-def setup(bot):
-    bot.add_cog(ReadyEvent(bot))
+async def setup(bot):
+    await bot.add_cog(ReadyEvent(bot))

@@ -61,17 +61,6 @@ async def on_ready():
         print(f'- {command.name}')
     print('------')
 
-# Debug event to see what's happening with command invocations
-@bot.event
-async def on_message(message):
-    if message.author.bot:
-        return
-    
-    if message.content.startswith('!pixelhelp'):
-        print(f"pixelhelp command detected in message: {message.content}")
-    # Pass the message to the command processor
-    await bot.process_commands(message)
-
 # Debug event to track command errors
 @bot.event
 async def on_command_error(ctx, error):
