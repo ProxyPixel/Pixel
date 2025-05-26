@@ -24,36 +24,55 @@ class MongoDB:
     def connect(self) -> None:
         """Connect to MongoDB using URI from environment variable."""
         if self.client is not None:
-            return
+            # Already connected or initialization attempted
+            if self.db is not None:
+                return # Successfully connected previously
+            # If db is None, connection previously failed, so we might want to retry
+            # For now, let's prevent retrying if client object exists but failed
+            # This matches the original logic of only trying to create MongoClient once.
+            # Consider a more robust retry mechanism if needed.
+            pass
 
         uri = os.getenv("MONGODB_URI")
         if not uri:
-            raise ValueError("MONGODB_URI environment variable not set")
+            logger.error("MONGODB_URI environment variable not set")
+            # Raise an error or handle as appropriate for your application
+            # For now, this will cause self.db and collections to remain None
+            return 
 
         try:
-            # Configure SSL context for better compatibility
-            ssl_context = ssl.create_default_context()
-            ssl_context.check_hostname = False
-            ssl_context.verify_mode = ssl.CERT_NONE
+            # Create an SSLContext that explicitly uses TLSv1.2
+            # MongoDB Atlas generally requires TLS 1.2+
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
+            # Optionally, you can set specific ciphers if needed, e.g.:
+            # context.set_ciphers('ECDHE+AESGCM:CHACHA20') 
+            # Using default ciphers for TLSv1.2 should be fine usually.
+
+            # The following are often used for debugging but reduce security.
+            # Use with caution and ideally not in production.
+            # context.check_hostname = False
+            # context.verify_mode = ssl.CERT_NONE
             
-            # Create client with SSL configuration
+            logger.info(f"Attempting to connect to MongoDB with URI: {uri[:uri.find(':')+3]}...{uri[-20:]}")
+
             self.client = MongoClient(
                 uri,
-                tls=True,  # Explicitly enable TLS
-                tlsCAFile=ssl.get_default_verify_paths().cafile, # Use default CA file
-                tlsAllowInvalidCertificates=True, # Temporarily allow for testing
-                tlsAllowInvalidHostnames=True, # Temporarily allow for testing
+                ssl_context=context, # Use the custom SSL context
                 serverSelectionTimeoutMS=30000,
                 connectTimeoutMS=30000,
                 socketTimeoutMS=30000,
-                maxPoolSize=10,
-                retryWrites=True
+                maxPoolSize=20, # Slightly increased pool size
+                retryWrites=True,
+                retryReads=True
             )
             
-            # Test the connection
+            # Test the connection by pinging the admin database
             self.client.admin.command('ping')
+            logger.info("Successfully pinged MongoDB admin database.")
             
             self.db = self.client.pixel_bot
+            logger.info(f"Connected to database: {self.db.name}")
             
             # Initialize collections
             self.profiles = self.db.profiles
@@ -61,26 +80,38 @@ class MongoDB:
             self.blacklists = self.db.blacklists
             self.switches = self.db.switches
             self.webhooks = self.db.webhooks
+            logger.info("MongoDB collections initialized.")
 
-            # Create indexes
+            # Create indexes (idempotent operation)
             self.profiles.create_index("user_id", unique=True)
             self.autoproxy.create_index("user_id", unique=True)
             self.blacklists.create_index("guild_id", unique=True)
             self.webhooks.create_index([("channel_id", 1), ("guild_id", 1)], unique=True)
+            logger.info("MongoDB indexes ensured.")
 
-            logger.info("Connected to MongoDB successfully")
+            logger.info("Successfully connected to MongoDB and initialized collections.")
+            
         except Exception as e:
-            logger.error(f"Failed to connect to MongoDB: {e}")
-            raise
+            logger.error(f"Failed to connect to MongoDB or initialize: {e}", exc_info=True)
+            # Ensure client is reset if connection fails, to allow potential retries if connect() is called again
+            self.client = None 
+            self.db = None
+            # Collections will remain None
+            # Do not raise here if we want the bot to start up despite DB issues
+            # The calling code (e.g., in cogs) should handle db being None
 
     def get_profile(self, user_id: str) -> Optional[Dict[str, Any]]:
         """Get a user's profile data."""
-        self.connect()
+        if not self.db or not self.profiles: 
+            logger.warning("Attempted to get_profile but MongoDB is not connected.")
+            return None
         return self.profiles.find_one({"user_id": user_id})
 
     def save_profile(self, user_id: str, data: Dict[str, Any]) -> None:
         """Save a user's profile data."""
-        self.connect()
+        if not self.db or not self.profiles: 
+            logger.warning("Attempted to save_profile but MongoDB is not connected.")
+            return
         data["updated_at"] = datetime.utcnow()
         self.profiles.update_one(
             {"user_id": user_id},
@@ -90,19 +121,25 @@ class MongoDB:
 
     def delete_profile(self, user_id: str) -> None:
         """Delete a user's profile."""
-        self.connect()
+        if not self.db or not self.profiles or not self.autoproxy: 
+            logger.warning("Attempted to delete_profile but MongoDB is not connected.")
+            return
         self.profiles.delete_one({"user_id": user_id})
         self.autoproxy.delete_one({"user_id": user_id})
 
     def get_autoproxy(self, user_id: str) -> Dict[str, Any]:
         """Get a user's autoproxy settings."""
-        self.connect()
+        if not self.db or not self.autoproxy: 
+            logger.warning("Attempted to get_autoproxy but MongoDB is not connected.")
+            return {"mode": "off"} # Return default if not connected
         settings = self.autoproxy.find_one({"user_id": user_id})
         return settings if settings else {"mode": "off"}
 
     def save_autoproxy(self, user_id: str, settings: Dict[str, Any]) -> None:
         """Save a user's autoproxy settings."""
-        self.connect()
+        if not self.db or not self.autoproxy: 
+            logger.warning("Attempted to save_autoproxy but MongoDB is not connected.")
+            return
         settings["updated_at"] = datetime.utcnow()
         self.autoproxy.update_one(
             {"user_id": user_id},
@@ -112,13 +149,17 @@ class MongoDB:
 
     def get_blacklist(self, guild_id: str) -> Dict[str, Any]:
         """Get a guild's blacklist settings."""
-        self.connect()
+        if not self.db or not self.blacklists: 
+            logger.warning("Attempted to get_blacklist but MongoDB is not connected.")
+            return {"channels": [], "categories": []} # Return default if not connected
         blacklist = self.blacklists.find_one({"guild_id": guild_id})
         return blacklist if blacklist else {"channels": [], "categories": []}
 
     def save_blacklist(self, guild_id: str, data: Dict[str, Any]) -> None:
         """Save a guild's blacklist settings."""
-        self.connect()
+        if not self.db or not self.blacklists: 
+            logger.warning("Attempted to save_blacklist but MongoDB is not connected.")
+            return
         data["updated_at"] = datetime.utcnow()
         self.blacklists.update_one(
             {"guild_id": guild_id},
@@ -128,7 +169,9 @@ class MongoDB:
 
     def get_webhook(self, channel_id: int, guild_id: int) -> Optional[Dict[str, Any]]:
         """Get webhook info for a channel."""
-        self.connect()
+        if not self.db or not self.webhooks: 
+            logger.warning("Attempted to get_webhook but MongoDB is not connected.")
+            return None
         return self.webhooks.find_one({
             "channel_id": channel_id,
             "guild_id": guild_id
@@ -136,7 +179,9 @@ class MongoDB:
 
     def save_webhook(self, channel_id: int, guild_id: int, webhook_id: int, webhook_token: str) -> None:
         """Save webhook info for a channel."""
-        self.connect()
+        if not self.db or not self.webhooks: 
+            logger.warning("Attempted to save_webhook but MongoDB is not connected.")
+            return
         self.webhooks.update_one(
             {
                 "channel_id": channel_id,
@@ -154,7 +199,9 @@ class MongoDB:
 
     def delete_webhook(self, channel_id: int, guild_id: int) -> None:
         """Delete webhook info for a channel."""
-        self.connect()
+        if not self.db or not self.webhooks: 
+            logger.warning("Attempted to delete_webhook but MongoDB is not connected.")
+            return
         self.webhooks.delete_one({
             "channel_id": channel_id,
             "guild_id": guild_id
@@ -162,7 +209,9 @@ class MongoDB:
 
     def record_switch(self, user_id: str, alter_id: str) -> None:
         """Record a switch event."""
-        self.connect()
+        if not self.db or not self.switches: 
+            logger.warning("Attempted to record_switch but MongoDB is not connected.")
+            return
         self.switches.insert_one({
             "user_id": user_id,
             "alter_id": alter_id,
@@ -171,7 +220,9 @@ class MongoDB:
 
     def get_recent_switches(self, user_id: str, limit: int = 10) -> List[Dict[str, Any]]:
         """Get recent switches for a user."""
-        self.connect()
+        if not self.db or not self.switches: 
+            logger.warning("Attempted to get_recent_switches but MongoDB is not connected.")
+            return [] # Return empty list if not connected
         return list(self.switches.find(
             {"user_id": user_id},
             sort=[("timestamp", -1)],
