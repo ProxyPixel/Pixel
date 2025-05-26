@@ -1,0 +1,3 @@
+"""
+Cogs initialization file.
+"""

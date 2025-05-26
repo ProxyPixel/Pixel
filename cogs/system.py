@@ -1,13 +1,14 @@
 import discord
 from discord.ext import commands
-from utils.profiles import load_profiles, save_profiles
+from utils.mongodb import db
 import json
 import io
 import asyncio
 from datetime import datetime
 import uuid
+import logging
 
-global_profiles = load_profiles()
+logger = logging.getLogger(__name__)
 
 class SystemCommands(commands.Cog):
     def __init__(self, bot):
@@ -16,12 +17,13 @@ class SystemCommands(commands.Cog):
     @commands.command(name="create_system")
     async def create_system(self, ctx, *, system_name: str):
         """Create a new system."""
+        logger.info(f"Instance {self.bot.instance_id} processing create_system for {ctx.author}")
+        
         user_id = str(ctx.author.id)
 
-        if user_id not in global_profiles:
-            global_profiles[user_id] = {"system": {}, "alters": {}, "folders": {}}
-
-        if "system" in global_profiles[user_id] and global_profiles[user_id]["system"]:
+        # Check if user already has a system
+        profile = db.get_profile(user_id)
+        if profile and profile.get("system"):
             await ctx.send("❌ You already have a system. Use `!edit_system` to modify it.")
             return
 
@@ -29,7 +31,11 @@ class SystemCommands(commands.Cog):
         system_id = str(uuid.uuid4())[:8]
         created_date = datetime.utcnow()
 
-        global_profiles[user_id]["system"] = {
+        # Create new profile if it doesn't exist
+        if not profile:
+            profile = {"user_id": user_id, "system": {}, "alters": {}, "folders": {}}
+
+        profile["system"] = {
             "name": system_name,
             "description": None,
             "avatar": None,
@@ -40,7 +46,7 @@ class SystemCommands(commands.Cog):
             "system_id": system_id,
             "created_date": created_date.isoformat()
         }
-        save_profiles(global_profiles)
+        db.save_profile(user_id, profile)
         
         embed = discord.Embed(
             title="✅ System Created Successfully",
@@ -52,13 +58,15 @@ class SystemCommands(commands.Cog):
     @commands.command(name="system")
     async def show_system(self, ctx):
         """Show the current system's info, including avatars, banners, and colors."""
+        
         user_id = str(ctx.author.id)
 
-        if user_id not in global_profiles or not global_profiles[user_id].get("system"):
-            await ctx.send("❌ You don't have a system. Use `!create_system <name>` to create one.")
+        profile = db.get_profile(user_id)
+        if not profile or not profile.get("system"):
+            await ctx.send("❌ You don't have a system. Use `!create_system <n>` to create one.")
             return
 
-        system_data = global_profiles[user_id]["system"]
+        system_data = profile["system"]
         
         # Create embed with system info
         embed = discord.Embed(
@@ -71,6 +79,10 @@ class SystemCommands(commands.Cog):
         # Color field (only if color is set)
         if system_data.get('color'):
             embed.add_field(name="🎨 Color", value=system_data['color'], inline=True)
+
+        # System Tag for proxying
+        if system_data.get('proxy_tag'):
+            embed.add_field(name="🏷️ Proxy Tag", value=f"`{system_data['proxy_tag']}`", inline=True)
 
         # Linked accounts (not spoilered)
         linked_accounts = system_data.get('linked_accounts', [])
@@ -105,10 +117,12 @@ class SystemCommands(commands.Cog):
     @commands.command(name="edit_system")
     async def edit_system(self, ctx):
         """Edit the current system (name, avatar, banner, description, pronouns, color)."""
+        
         user_id = str(ctx.author.id)
 
-        if user_id not in global_profiles or not global_profiles[user_id].get("system"):
-            await ctx.send("❌ You don't have a system. Use `!create_system <name>` to create one.")
+        profile = db.get_profile(user_id)
+        if not profile or not profile.get("system"):
+            await ctx.send("❌ You don't have a system. Use `!create_system <n>` to create one.")
             return
 
         embed = discord.Embed(
@@ -163,17 +177,22 @@ class SystemCommands(commands.Cog):
             response = await self.bot.wait_for('message', timeout=60.0, check=check)
             user_id = str(ctx.author.id)
             
+            profile = db.get_profile(user_id)
+            if not profile:
+                await ctx.send("❌ System not found.")
+                return
+
             if field == 'color':
                 # Validate hex color
                 color_value = response.content.strip()
                 if not color_value.startswith('#') or len(color_value) != 7:
                     await ctx.send("❌ Invalid color format. Please use hex format like #FF5733")
                     return
-                global_profiles[user_id]["system"][field] = color_value
+                profile["system"][field] = color_value
             else:
-                global_profiles[user_id]["system"][field] = response.content.strip()
+                profile["system"][field] = response.content.strip()
             
-            save_profiles(global_profiles)
+            db.save_profile(user_id, profile)
             await ctx.send(f"✅ System {field} updated successfully!")
             
         except asyncio.TimeoutError:
@@ -182,9 +201,11 @@ class SystemCommands(commands.Cog):
     @commands.command(name="delete_system")
     async def delete_system(self, ctx):
         """Delete the current system permanently."""
+        
         user_id = str(ctx.author.id)
 
-        if user_id not in global_profiles or not global_profiles[user_id].get("system"):
+        profile = db.get_profile(user_id)
+        if not profile or not profile.get("system"):
             await ctx.send("❌ You don't have a system to delete.")
             return
 
@@ -203,246 +224,268 @@ class SystemCommands(commands.Cog):
             return user == ctx.author and reaction.message.id == message.id and str(reaction.emoji) in ['✅', '❌']
 
         try:
-            reaction, user = await self.bot.wait_for('reaction_add', timeout=30.0, check=check)
+            reaction, user = await self.bot.wait_for('reaction_add', timeout=60.0, check=check)
             
             if str(reaction.emoji) == '✅':
-            del global_profiles[user_id]["system"]
-            save_profiles(global_profiles)
-            await ctx.send("🗑️ System deleted successfully!")
-        else:
+                # Delete the system
+                db.delete_profile(user_id)
+                await ctx.send("✅ Your system has been deleted.")
+            else:
                 await ctx.send("❌ System deletion cancelled.")
                 
         except asyncio.TimeoutError:
-            await ctx.send("⏰ Confirmation timed out. System deletion cancelled.")
+            await ctx.send("⏰ Deletion timed out.")
 
     @commands.command(name="export_system")
     async def export_system(self, ctx):
-        """Export your entire system to a JSON file (sent to DMs)."""
+        """Export your system data as a JSON file."""
+        
         user_id = str(ctx.author.id)
 
-        if user_id not in global_profiles:
-            await ctx.send("❌ You don't have any data to export.")
+        profile = db.get_profile(user_id)
+        if not profile:
+            await ctx.send("❌ You don't have a system to export.")
             return
 
+        # Convert MongoDB ObjectId to string for JSON serialization
+        def convert_objectid(obj):
+            if hasattr(obj, '__dict__'):
+                for key, value in obj.__dict__.items():
+                    if hasattr(value, '__class__') and 'ObjectId' in str(value.__class__):
+                        obj.__dict__[key] = str(value)
+            return obj
+
+        # Clean the profile data for JSON export
+        clean_profile = {}
+        for key, value in profile.items():
+            if hasattr(value, '__class__') and 'ObjectId' in str(value.__class__):
+                clean_profile[key] = str(value)
+            elif key == '_id':
+                # Skip MongoDB's _id field
+                continue
+            else:
+                clean_profile[key] = value
+
         try:
-            # Create JSON export
-            export_data = {
-                "exported_at": datetime.utcnow().isoformat(),
-                "user_id": user_id,
-                "system": global_profiles[user_id].get("system", {}),
-                "alters": global_profiles[user_id].get("alters", {}),
-                "folders": global_profiles[user_id].get("folders", {})
-            }
+            # Convert the data to JSON
+            json_data = json.dumps(clean_profile, indent=4, default=str)
             
-            json_data = json.dumps(export_data, indent=2)
-            file_obj = io.StringIO(json_data)
+            # Create a discord.File object
+            discord_file = discord.File(
+                fp=io.BytesIO(json_data.encode()),
+                filename=f"system_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            )
             
-            # Send to DMs
-            discord_file = discord.File(io.BytesIO(json_data.encode()), filename=f"pixel_system_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
-            
+            # Try to send via DM first
             try:
-                await ctx.author.send("📤 Here's your system export:", file=discord_file)
-                await ctx.send("✅ System exported successfully! Check your DMs.")
+                await ctx.author.send("✅ Here's your system data backup:", file=discord_file)
+                await ctx.send("✅ I've DMed you your system backup! Make sure your DMs are open.")
             except discord.Forbidden:
-                await ctx.send("❌ I couldn't send you a DM. Please enable DMs from server members and try again.")
+                # If DM fails, send in channel
+                await ctx.send("❌ I couldn't DM you the backup file. Here it is in this channel:", file=discord_file)
                 
         except Exception as e:
-            await ctx.send(f"❌ Error exporting system: {str(e)}")
+            logger.error(f"Error exporting system: {str(e)}")
+            await ctx.send("❌ An error occurred while exporting your system data. Please try again later.")
 
     @commands.command(name="import_system")
     async def import_system(self, ctx):
-        """Import a previously exported system from a JSON file."""
+        """Import system data from a JSON file."""
+        
         if not ctx.message.attachments:
-            await ctx.send("❌ Please attach a JSON file to import.")
+            await ctx.send("❌ Please attach a JSON file containing your system data.")
             return
-
+            
         attachment = ctx.message.attachments[0]
         if not attachment.filename.endswith('.json'):
-            await ctx.send("❌ Please attach a valid JSON file.")
+            await ctx.send("❌ Please provide a JSON file.")
             return
-
+            
         try:
-            data = await attachment.read()
-            import_data = json.loads(data.decode())
+            # Download and read the file
+            json_data = await attachment.read()
+            system_data = json.loads(json_data)
             
-            user_id = str(ctx.author.id)
-            
-            # Validate import data structure
-            if not all(key in import_data for key in ['system', 'alters', 'folders']):
-                await ctx.send("❌ Invalid export file format.")
+            # Basic validation
+            required_keys = ["system", "alters", "folders"]
+            if not all(key in system_data for key in required_keys):
+                await ctx.send("❌ Invalid system data format.")
                 return
-
+                
             # Confirmation
             embed = discord.Embed(
                 title="⚠️ Import System",
                 description="This will overwrite your current system data. Are you sure?\n\nReact with ✅ to confirm or ❌ to cancel.",
-                color=0xFF9900
+                color=0xFF0000
             )
             message = await ctx.send(embed=embed)
             
             await message.add_reaction('✅')
             await message.add_reaction('❌')
-
+            
             def check(reaction, user):
                 return user == ctx.author and reaction.message.id == message.id and str(reaction.emoji) in ['✅', '❌']
-
-            reaction, user = await self.bot.wait_for('reaction_add', timeout=30.0, check=check)
-            
-            if str(reaction.emoji) == '✅':
-                global_profiles[user_id] = {
-                    "system": import_data['system'],
-                    "alters": import_data['alters'],
-                    "folders": import_data['folders']
-                }
-                save_profiles(global_profiles)
-                await ctx.send("✅ System imported successfully!")
-            else:
-                await ctx.send("❌ Import cancelled.")
+                
+            try:
+                reaction, user = await self.bot.wait_for('reaction_add', timeout=60.0, check=check)
+                
+                if str(reaction.emoji) == '✅':
+                    # Import the data
+                    user_id = str(ctx.author.id)
+                    system_data["user_id"] = user_id  # Ensure user_id is set
+                    db.save_profile(user_id, system_data)
+                    await ctx.send("✅ System data imported successfully!")
+                else:
+                    await ctx.send("❌ Import cancelled.")
+                    
+            except asyncio.TimeoutError:
+                await ctx.send("⏰ Import timed out.")
                 
         except json.JSONDecodeError:
-            await ctx.send("❌ Invalid JSON file.")
-        except asyncio.TimeoutError:
-            await ctx.send("⏰ Import confirmation timed out.")
+            await ctx.send("❌ Invalid JSON format.")
         except Exception as e:
-            await ctx.send(f"❌ Error importing system: {str(e)}")
+            await ctx.send(f"❌ An error occurred: {str(e)}")
 
     @commands.command(name="acc_add", aliases=["system_acc_add"])
     async def add_linked_account(self, ctx, username: str):
         """Add a linked account to your system."""
         user_id = str(ctx.author.id)
 
-        if user_id not in global_profiles or not global_profiles[user_id].get("system"):
-            await ctx.send("❌ You don't have a system. Use `!create_system <name>` to create one.")
+        profile = db.get_profile(user_id)
+        if not profile or not profile.get("system"):
+            await ctx.send("❌ You don't have a system. Use `!create_system <n>` to create one.")
             return
 
-        linked_accounts = global_profiles[user_id]["system"].setdefault("linked_accounts", [])
-        
-        if username in linked_accounts:
-            await ctx.send(f"❌ `{username}` is already linked to your system.")
+        if username in profile["system"]["linked_accounts"]:
+            await ctx.send("❌ This account is already linked to your system.")
             return
 
-        linked_accounts.append(username)
-        save_profiles(global_profiles)
-        await ctx.send(f"✅ Added `{username}` as a linked account to your system.")
+        profile["system"]["linked_accounts"].append(username)
+        db.save_profile(user_id, profile)
+        await ctx.send(f"✅ Added {username} to your system's linked accounts.")
 
     @commands.command(name="import_pluralkit")
     async def import_pluralkit(self, ctx):
-        """Import your PluralKit profiles, including proxy avatars and colors."""
+        """Import system data from a PluralKit export file."""
         if not ctx.message.attachments:
-            await ctx.send("❌ Please attach a PluralKit export JSON file to import.\n\n📝 **How to get your PluralKit export:**\n1. Use `pk;export` in DMs with PluralKit\n2. Download the JSON file\n3. Upload it with this command")
+            await ctx.send("❌ Please attach your PluralKit export file.")
             return
-
+            
         attachment = ctx.message.attachments[0]
         if not attachment.filename.endswith('.json'):
-            await ctx.send("❌ Please attach a valid JSON file.")
+            await ctx.send("❌ Please provide a JSON file.")
             return
-
+            
         try:
-            data = await attachment.read()
-            pk_data = json.loads(data.decode())
+            # Download and read the file
+            json_data = await attachment.read()
+            pk_data = json.loads(json_data)
             
-            user_id = str(ctx.author.id)
-            
-            # Validate PluralKit export structure
-            if 'members' not in pk_data:
-                await ctx.send("❌ This doesn't appear to be a valid PluralKit export file.")
+            # Basic validation
+            if "system" not in pk_data or "members" not in pk_data:
+                await ctx.send("❌ Invalid PluralKit export format.")
                 return
-
-            # Initialize user data if not exists
-            if user_id not in global_profiles:
-                global_profiles[user_id] = {"system": {}, "alters": {}, "folders": {}}
-
-            # Import system info if available
-            if 'system' in pk_data and pk_data['system']:
-                pk_system = pk_data['system']
                 
-                # Create system if doesn't exist
-                if not global_profiles[user_id].get("system"):
-                    system_name = pk_system.get('name', 'Imported System')
-                    global_profiles[user_id]["system"] = {
-                        "name": system_name,
-                        "system_id": str(uuid.uuid4()),
-                        "created_date": datetime.utcnow().isoformat(),
-                        "description": pk_system.get('description', ''),
-                        "avatar": pk_system.get('avatar_url', ''),
-                        "banner": pk_system.get('banner', ''),
-                        "pronouns": pk_system.get('pronouns', ''),
-                        "color": pk_system.get('color'),
-                        "linked_accounts": []
-                    }
-
-            # Import members (alters)
-            imported_count = 0
-            skipped_count = 0
+            # Convert PluralKit data to our format
+            user_id = str(ctx.author.id)
+            system_data = {
+                "user_id": user_id,
+                "system": {
+                    "name": pk_data["system"].get("name", "Imported System"),
+                    "description": pk_data["system"].get("description"),
+                    "avatar": pk_data["system"].get("avatar_url"),
+                    "banner": None,  # PK doesn't have banners
+                    "pronouns": pk_data["system"].get("pronouns"),
+                    "color": f"#{pk_data['system'].get('color', '8A2BE2')}",
+                    "linked_accounts": [ctx.author.name],
+                    "system_id": str(uuid.uuid4())[:8],
+                    "created_date": datetime.utcnow().isoformat()
+                },
+                "alters": {},
+                "folders": {}
+            }
             
-            for member in pk_data['members']:
-                member_name = member.get('name', 'Unknown')
-                
-                # Skip if alter already exists
-                if member_name in global_profiles[user_id]["alters"]:
-                    skipped_count += 1
-                    continue
-                
-                # Convert PluralKit proxy tags to our format
-                proxy_tags = member.get('proxy_tags', [])
-                proxy_format = ""
-                if proxy_tags:
-                    # Use the first proxy tag
-                    first_tag = proxy_tags[0]
-                    prefix = first_tag.get('prefix', '')
-                    suffix = first_tag.get('suffix', '')
-                    if prefix and suffix:
-                        proxy_format = f"{prefix}TEXT{suffix}"
-                    elif prefix:
-                        proxy_format = f"{prefix}TEXT"
-                    elif suffix:
-                        proxy_format = f"TEXT{suffix}"
-
-                # Create the alter
-                global_profiles[user_id]["alters"][member_name] = {
-                    "name": member_name,
-                    "displayname": member.get('display_name', member_name),
-                    "pronouns": member.get('pronouns', ''),
-                    "description": member.get('description', ''),
-                    "avatar": member.get('avatar_url', ''),
-                    "banner": member.get('banner', ''),
-                    "proxy": proxy_format,
-                    "color": member.get('color'),
-                    "proxy_avatar": member.get('proxy_avatar_url', ''),
-                    "aliases": [],
-                    "created_date": member.get('created', datetime.utcnow().isoformat())
+            # Convert members to alters
+            for member in pk_data["members"]:
+                alter_id = str(uuid.uuid4())[:8]
+                system_data["alters"][member["name"]] = {
+                    "id": alter_id,
+                    "displayname": member.get("display_name", member["name"]),
+                    "avatar": member.get("avatar_url"),
+                    "description": member.get("description"),
+                    "pronouns": member.get("pronouns"),
+                    "color": f"#{member.get('color', '8A2BE2')}",
+                    "proxy": f"{member.get('prefix', '')}TEXT{member.get('suffix', '')}" if member.get('prefix') or member.get('suffix') else None
                 }
-                imported_count += 1
-
-            save_profiles(global_profiles)
-
-            # Send success message
-            embed = discord.Embed(
-                title="🔄 PluralKit Import Complete",
-                description="Your PluralKit data has been imported successfully!",
-                color=0x00FF00
-            )
-            embed.add_field(name="✅ Imported Alters", value=str(imported_count), inline=True)
-            if skipped_count > 0:
-                embed.add_field(name="⏭️ Skipped (Already Exist)", value=str(skipped_count), inline=True)
             
-            embed.add_field(
-                name="📝 What was imported:",
-                value="• Alter names and display names\n• Descriptions and pronouns\n• Avatar and banner URLs\n• Proxy tags (converted to our format)\n• Colors and proxy avatars\n• System info (if you didn't have one)",
-                inline=False
+            # Confirmation
+            embed = discord.Embed(
+                title="⚠️ Import PluralKit Data",
+                description="This will overwrite your current system data. Are you sure?\n\nReact with ✅ to confirm or ❌ to cancel.",
+                color=0xFF0000
             )
-            embed.add_field(
-                name="🔧 Next Steps:",
-                value="Use `!list_profiles` to see your imported alters or `!edit <name>` to customize them further.",
-                inline=False
-            )
-
-            await ctx.send(embed=embed)
+            message = await ctx.send(embed=embed)
+            
+            await message.add_reaction('✅')
+            await message.add_reaction('❌')
+            
+            def check(reaction, user):
+                return user == ctx.author and reaction.message.id == message.id and str(reaction.emoji) in ['✅', '❌']
+                
+            try:
+                reaction, user = await self.bot.wait_for('reaction_add', timeout=60.0, check=check)
+                
+                if str(reaction.emoji) == '✅':
+                    # Import the data
+                    db.save_profile(user_id, system_data)
+                    await ctx.send("✅ PluralKit data imported successfully!")
+                else:
+                    await ctx.send("❌ Import cancelled.")
+                    
+            except asyncio.TimeoutError:
+                await ctx.send("⏰ Import timed out.")
                 
         except json.JSONDecodeError:
-            await ctx.send("❌ Invalid JSON file. Please make sure this is a valid PluralKit export.")
+            await ctx.send("❌ Invalid JSON format.")
         except Exception as e:
-            await ctx.send(f"❌ Error importing PluralKit data: {str(e)}")
+            await ctx.send(f"❌ An error occurred: {str(e)}")
+
+    @commands.command(name="tag")
+    async def set_system_tag(self, ctx, *, tag: str = None):
+        """Set a system tag that appears next to the alter name when proxying."""
+        
+        user_id = str(ctx.author.id)
+        profile = db.get_profile(user_id)
+        
+        if not profile or not profile.get("system"):
+            await ctx.send("❌ You don't have a system. Use `!create_system <name>` to create one.")
+            return
+        
+        if tag is None:
+            # Show current tag
+            current_tag = profile["system"].get("tag", "")
+            if current_tag:
+                await ctx.send(f"🏷️ Current system tag: `{current_tag}`")
+            else:
+                await ctx.send("🏷️ No system tag set. Use `!tag <tag>` to set one.")
+            return
+        
+        # Validate tag length
+        if len(tag) > 20:
+            await ctx.send("❌ System tag must be 20 characters or less.")
+            return
+        
+        # Update system tag
+        profile["system"]["tag"] = tag
+        db.save_profile(user_id, profile)
+        
+        embed = discord.Embed(
+            title="🏷️ System Tag Updated",
+            description=f"System tag set to: `{tag}`\n\nThis tag will appear next to alter names when proxying.",
+            color=0x8A2BE2
+        )
+        await ctx.send(embed=embed)
 
 async def setup(bot):
+    """Set up the system cog."""
     await bot.add_cog(SystemCommands(bot))

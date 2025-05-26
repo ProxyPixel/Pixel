@@ -1,6 +1,6 @@
 import discord
 from discord.ext import commands
-from utils.blacklist import load_blacklist, save_blacklist
+from utils.mongodb import db
 import time
 import asyncio
 
@@ -16,6 +16,7 @@ class AdminCommands(commands.Cog):
     @commands.check(is_admin)
     async def pixel_status(self, ctx):
         """Check the bot's current speed and latency (admin only)."""
+        
         start_time = time.time()
         
         # Test message send latency
@@ -43,6 +44,13 @@ class AdminCommands(commands.Cog):
         user_count = sum(guild.member_count for guild in self.bot.guilds)
         embed.add_field(name="👥 Total Users", value=str(user_count), inline=True)
         
+        # Add MongoDB status
+        try:
+            db.connect()
+            embed.add_field(name="📊 Database", value="Connected", inline=True)
+        except Exception as e:
+            embed.add_field(name="📊 Database", value="Error", inline=True)
+        
         embed.set_footer(text=f"Requested by {ctx.author.display_name}")
         
         await message.edit(content=None, embed=embed)
@@ -51,14 +59,20 @@ class AdminCommands(commands.Cog):
     @commands.check(is_admin)
     async def blacklist_channel(self, ctx, channel: discord.TextChannel):
         """Blacklist a channel from proxy detection (admin only)."""
-        blacklist = load_blacklist()
         
-        if channel.id in blacklist:
+        guild_id = str(ctx.guild.id)
+        
+        # Get or create blacklist settings
+        blacklist = db.get_blacklist(guild_id)
+        if not blacklist:
+            blacklist = {"guild_id": guild_id, "channels": [], "categories": []}
+        
+        if channel.id in blacklist["channels"]:
             await ctx.send(f"❌ {channel.mention} is already blacklisted.")
             return
         
-        blacklist.append(channel.id)
-        save_blacklist(blacklist)
+        blacklist["channels"].append(channel.id)
+        db.save_blacklist(guild_id, blacklist)
         
         embed = discord.Embed(
             title="✅ Channel Blacklisted",
@@ -71,16 +85,20 @@ class AdminCommands(commands.Cog):
     @commands.check(is_admin)
     async def blacklist_category(self, ctx, category: discord.CategoryChannel):
         """Blacklist an entire category from proxy detection (admin only)."""
-        from utils.blacklist import load_category_blacklist, save_category_blacklist
         
-        blacklist = load_category_blacklist()
+        guild_id = str(ctx.guild.id)
         
-        if category.id in blacklist:
+        # Get or create blacklist settings
+        blacklist = db.get_blacklist(guild_id)
+        if not blacklist:
+            blacklist = {"guild_id": guild_id, "channels": [], "categories": []}
+        
+        if category.id in blacklist["categories"]:
             await ctx.send(f"❌ Category '{category.name}' is already blacklisted.")
             return
         
-        blacklist.append(category.id)
-        save_category_blacklist(blacklist)
+        blacklist["categories"].append(category.id)
+        db.save_blacklist(guild_id, blacklist)
         
         embed = discord.Embed(
             title="✅ Category Blacklisted",
@@ -93,10 +111,13 @@ class AdminCommands(commands.Cog):
     @commands.check(is_admin)
     async def list_blacklists(self, ctx):
         """List all blacklisted channels and categories (admin only)."""
-        from utils.blacklist import load_category_blacklist
         
-        channel_blacklist = load_blacklist()
-        category_blacklist = load_category_blacklist()
+        guild_id = str(ctx.guild.id)
+        
+        # Get blacklist settings
+        blacklist = db.get_blacklist(guild_id)
+        if not blacklist:
+            blacklist = {"channels": [], "categories": []}
         
         embed = discord.Embed(
             title="🚫 Blacklisted Channels & Categories",
@@ -104,9 +125,9 @@ class AdminCommands(commands.Cog):
         )
         
         # List blacklisted channels
-        if channel_blacklist:
+        if blacklist["channels"]:
             channel_mentions = []
-            for channel_id in channel_blacklist:
+            for channel_id in blacklist["channels"]:
                 channel = self.bot.get_channel(channel_id)
                 if channel:
                     channel_mentions.append(channel.mention)
@@ -122,9 +143,9 @@ class AdminCommands(commands.Cog):
             embed.add_field(name="📺 Blacklisted Channels", value="None", inline=False)
         
         # List blacklisted categories
-        if category_blacklist:
+        if blacklist["categories"]:
             category_names = []
-            for category_id in category_blacklist:
+            for category_id in blacklist["categories"]:
                 category = self.bot.get_channel(category_id)
                 if category:
                     category_names.append(f"📁 {category.name}")
@@ -145,6 +166,7 @@ class AdminCommands(commands.Cog):
     @commands.check(is_admin)
     async def admin_commands(self, ctx):
         """Display all admin commands (admin only)."""
+        
         embed = discord.Embed(
             title="🔧 Admin Commands",
             description="Available administrative commands for PIXEL bot.",
@@ -181,4 +203,5 @@ class AdminCommands(commands.Cog):
             await ctx.send(f"❌ An error occurred: {error}")
 
 async def setup(bot):
+    """Set up the admin cog."""
     await bot.add_cog(AdminCommands(bot))

@@ -1,12 +1,10 @@
 import discord
 from discord.ext import commands
-from utils.profiles import load_profiles, save_profiles
+from utils.mongodb import db
 from utils.helpers import find_alter_by_name, create_embed
 import asyncio
 import uuid
 from datetime import datetime
-
-global_profiles = load_profiles()
 
 class AlterCommands(commands.Cog):
     def __init__(self, bot):
@@ -15,19 +13,22 @@ class AlterCommands(commands.Cog):
     @commands.command(name="create")
     async def create_alter(self, ctx, name: str, pronouns: str = None, *, description: str = None):
         """Create a new profile."""
+        
         user_id = str(ctx.author.id)
 
-        if user_id not in global_profiles:
-            global_profiles[user_id] = {"system": {}, "alters": {}, "folders": {}}
+        # Get or create profile
+        profile = db.get_profile(user_id)
+        if not profile:
+            profile = {"user_id": user_id, "system": {}, "alters": {}, "folders": {}}
 
-        if name in global_profiles[user_id]["alters"]:
+        if name in profile["alters"]:
             await ctx.send(f"❌ An alter with the name **{name}** already exists.")
             return
 
         # Generate unique alter ID
         alter_id = str(uuid.uuid4())[:8]
 
-        global_profiles[user_id]["alters"][name] = {
+        profile["alters"][name] = {
             "name": name,
             "alter_id": alter_id,
             "displayname": name,
@@ -41,7 +42,7 @@ class AlterCommands(commands.Cog):
             "color": None,
             "created_date": datetime.utcnow().isoformat()
         }
-        save_profiles(global_profiles)
+        db.save_profile(user_id, profile)
         
         embed = discord.Embed(
             title="✅ Alter Created Successfully",
@@ -58,14 +59,20 @@ class AlterCommands(commands.Cog):
     @commands.command(name="show")
     async def show_alter(self, ctx, *, name: str):
         """Show a profile, including avatars, banners, and colors."""
+        
         user_id = str(ctx.author.id)
         
-        actual_name = find_alter_by_name(user_id, name)
+        profile = db.get_profile(user_id)
+        if not profile:
+            await ctx.send("❌ You don't have any alters.")
+            return
+
+        actual_name = find_alter_by_name(profile, name)
         if not actual_name:
             await ctx.send(f"❌ Alter '{name}' does not exist.")
             return
 
-        alter_data = global_profiles[user_id]["alters"][actual_name]
+        alter_data = profile["alters"][actual_name]
         
         # Use alter's color or default
         color = int(alter_data.get('color', '0x8A2BE2'), 16) if alter_data.get('color') else 0x8A2BE2
@@ -113,13 +120,15 @@ class AlterCommands(commands.Cog):
     @commands.command(name="list_profiles")
     async def list_profiles(self, ctx):
         """List all profiles in the current system."""
+        
         user_id = str(ctx.author.id)
 
-        if user_id not in global_profiles or not global_profiles[user_id].get("alters"):
-            await ctx.send("❌ You don't have any alters. Use `!create <name> <pronouns>` to create one.")
+        profile = db.get_profile(user_id)
+        if not profile or not profile.get("alters"):
+            await ctx.send("❌ You don't have any alters. Use `!create <n> <pronouns>` to create one.")
             return
 
-        alters = global_profiles[user_id]["alters"]
+        alters = profile["alters"]
         
         embed = discord.Embed(
             title="👥 Your Alters",
@@ -143,9 +152,15 @@ class AlterCommands(commands.Cog):
     @commands.command(name="edit")
     async def edit_alter(self, ctx, *, name: str):
         """Edit an existing profile (name, displayname, pronouns, description, avatar, banner, proxy, color, proxy avatar)."""
+        
         user_id = str(ctx.author.id)
         
-        actual_name = find_alter_by_name(user_id, name)
+        profile = db.get_profile(user_id)
+        if not profile:
+            await ctx.send("❌ You don't have any alters.")
+            return
+
+        actual_name = find_alter_by_name(profile, name)
         if not actual_name:
             await ctx.send(f"❌ Alter '{name}' does not exist.")
             return
@@ -208,28 +223,39 @@ class AlterCommands(commands.Cog):
             response = await self.bot.wait_for('message', timeout=60.0, check=check)
             user_id = str(ctx.author.id)
             
+            profile = db.get_profile(user_id)
+            if not profile:
+                await ctx.send("❌ Alter not found.")
+                return
+
             if field == 'color':
                 # Validate hex color
                 color_value = response.content.strip()
                 if not color_value.startswith('#') or len(color_value) != 7:
                     await ctx.send("❌ Invalid color format. Please use hex format like #FF5733")
                     return
-                global_profiles[user_id]["alters"][alter_name][field] = color_value
+                profile["alters"][alter_name][field] = color_value
             else:
-                global_profiles[user_id]["alters"][alter_name][field] = response.content.strip()
+                profile["alters"][alter_name][field] = response.content.strip()
             
-            save_profiles(global_profiles)
-            await ctx.send(f"✅ {alter_name}'s {field} updated successfully!")
+            db.save_profile(user_id, profile)
+            await ctx.send(f"✅ {field.title()} updated successfully!")
             
         except asyncio.TimeoutError:
             await ctx.send("⏰ Edit timed out.")
 
     @commands.command(name="delete")
     async def delete_alter(self, ctx, *, name: str):
-        """Delete a profile."""
+        """Delete an alter permanently."""
+        
         user_id = str(ctx.author.id)
+        
+        profile = db.get_profile(user_id)
+        if not profile:
+            await ctx.send("❌ You don't have any alters.")
+            return
 
-        actual_name = find_alter_by_name(user_id, name)
+        actual_name = find_alter_by_name(profile, name)
         if not actual_name:
             await ctx.send(f"❌ Alter '{name}' does not exist.")
             return
@@ -249,77 +275,100 @@ class AlterCommands(commands.Cog):
             return user == ctx.author and reaction.message.id == message.id and str(reaction.emoji) in ['✅', '❌']
 
         try:
-            reaction, user = await self.bot.wait_for('reaction_add', timeout=30.0, check=check)
+            reaction, user = await self.bot.wait_for('reaction_add', timeout=60.0, check=check)
             
             if str(reaction.emoji) == '✅':
-                del global_profiles[user_id]["alters"][actual_name]
-                save_profiles(global_profiles)
-                await ctx.send(f"🗑️ Alter '{actual_name}' deleted successfully!")
+                # Delete the alter
+                del profile["alters"][actual_name]
+                db.save_profile(user_id, profile)
+                await ctx.send(f"✅ Alter **{actual_name}** has been deleted.")
             else:
                 await ctx.send("❌ Deletion cancelled.")
                 
         except asyncio.TimeoutError:
-            await ctx.send("⏰ Confirmation timed out. Deletion cancelled.")
+            await ctx.send("⏰ Deletion timed out.")
 
     @commands.command(name="alias")
     async def add_alias(self, ctx, name: str, *, alias: str):
-        """Add an alias to a profile."""
+        """Add an alias for an alter."""
+        
         user_id = str(ctx.author.id)
         
-        actual_name = find_alter_by_name(user_id, name)
+        profile = db.get_profile(user_id)
+        if not profile:
+            await ctx.send("❌ You don't have any alters.")
+            return
+
+        actual_name = find_alter_by_name(profile, name)
         if not actual_name:
             await ctx.send(f"❌ Alter '{name}' does not exist.")
             return
 
-        aliases = global_profiles[user_id]["alters"][actual_name].setdefault("aliases", [])
-        
-        if alias in aliases:
+        # Check if alias already exists
+        if alias in profile["alters"][actual_name].get("aliases", []):
             await ctx.send(f"❌ Alias '{alias}' already exists for {actual_name}.")
             return
 
-        aliases.append(alias)
-        save_profiles(global_profiles)
-        await ctx.send(f"✅ Added alias '{alias}' to {actual_name}.")
+        # Add the alias
+        if "aliases" not in profile["alters"][actual_name]:
+            profile["alters"][actual_name]["aliases"] = []
+        profile["alters"][actual_name]["aliases"].append(alias)
+        db.save_profile(user_id, profile)
+        
+        await ctx.send(f"✅ Added alias '{alias}' for {actual_name}.")
 
     @commands.command(name="remove_alias")
     async def remove_alias(self, ctx, name: str, *, alias: str):
-        """Remove an alias from a profile."""
+        """Remove an alias from an alter."""
+        
         user_id = str(ctx.author.id)
         
-        actual_name = find_alter_by_name(user_id, name)
+        profile = db.get_profile(user_id)
+        if not profile:
+            await ctx.send("❌ You don't have any alters.")
+            return
+
+        actual_name = find_alter_by_name(profile, name)
         if not actual_name:
             await ctx.send(f"❌ Alter '{name}' does not exist.")
             return
 
-        aliases = global_profiles[user_id]["alters"][actual_name].get("aliases", [])
-        
-        if alias not in aliases:
+        # Check if alias exists
+        if alias not in profile["alters"][actual_name].get("aliases", []):
             await ctx.send(f"❌ Alias '{alias}' does not exist for {actual_name}.")
             return
 
-        aliases.remove(alias)
-        save_profiles(global_profiles)
+        # Remove the alias
+        profile["alters"][actual_name]["aliases"].remove(alias)
+        db.save_profile(user_id, profile)
+        
         await ctx.send(f"✅ Removed alias '{alias}' from {actual_name}.")
 
     @commands.command(name="proxyavatar")
     async def set_proxy_avatar(self, ctx, name: str, *, avatar_url: str = None):
-        """Set a separate avatar for proxying."""
+        """Set a different avatar for proxying (or clear it)."""
+        
         user_id = str(ctx.author.id)
+        
+        profile = db.get_profile(user_id)
+        if not profile:
+            await ctx.send("❌ You don't have any alters.")
+            return
 
-        actual_name = find_alter_by_name(user_id, name)
+        actual_name = find_alter_by_name(profile, name)
         if not actual_name:
             await ctx.send(f"❌ Alter '{name}' does not exist.")
             return
 
         if avatar_url:
-            global_profiles[user_id]["alters"][actual_name]["proxy_avatar"] = avatar_url
-            save_profiles(global_profiles)
-            await ctx.send(f"✅ Proxy avatar set for {actual_name}.")
+            profile["alters"][actual_name]["proxy_avatar"] = avatar_url
+            await ctx.send(f"✅ Set proxy avatar for {actual_name}.")
         else:
-            # Remove proxy avatar
-            global_profiles[user_id]["alters"][actual_name]["proxy_avatar"] = None
-            save_profiles(global_profiles)
-            await ctx.send(f"✅ Proxy avatar removed for {actual_name}.")
+            profile["alters"][actual_name]["proxy_avatar"] = None
+            await ctx.send(f"✅ Cleared proxy avatar for {actual_name}.")
+            
+        db.save_profile(user_id, profile)
 
 async def setup(bot):
+    """Set up the alters cog."""
     await bot.add_cog(AlterCommands(bot))

@@ -1,10 +1,8 @@
 import discord
 from discord.ext import commands
-from utils.profiles import load_profiles, save_profiles
+from utils.mongodb import db
 from utils.helpers import find_alter_by_name, create_embed
 import asyncio
-
-global_profiles = load_profiles()
 
 class FolderCommands(commands.Cog):
     def __init__(self, bot):
@@ -13,16 +11,19 @@ class FolderCommands(commands.Cog):
     @commands.command(name="create_folder")
     async def create_folder(self, ctx, *, folder_name: str):
         """Create a new folder with a name, color, banner, icon, and alters."""
+        
         user_id = str(ctx.author.id)
 
-        if user_id not in global_profiles:
-            global_profiles[user_id] = {"system": {}, "alters": {}, "folders": {}}
+        # Get or create profile
+        profile = db.get_profile(user_id)
+        if not profile:
+            profile = {"user_id": user_id, "system": {}, "alters": {}, "folders": {}}
 
-        if folder_name in global_profiles[user_id]["folders"]:
+        if folder_name in profile["folders"]:
             await ctx.send(f"❌ A folder with the name **{folder_name}** already exists.")
             return
 
-        global_profiles[user_id]["folders"][folder_name] = {
+        profile["folders"][folder_name] = {
             "name": folder_name,
             "color": None,
             "banner": None,
@@ -30,7 +31,7 @@ class FolderCommands(commands.Cog):
             "description": None,
             "alters": []
         }
-        save_profiles(global_profiles)
+        db.save_profile(user_id, profile)
         
         embed = discord.Embed(
             title="✅ Folder Created Successfully",
@@ -43,9 +44,11 @@ class FolderCommands(commands.Cog):
     @commands.command(name="edit_folder")
     async def edit_folder(self, ctx, *, folder_name: str):
         """Edit an existing folder."""
+        
         user_id = str(ctx.author.id)
 
-        if folder_name not in global_profiles.get(user_id, {}).get("folders", {}):
+        profile = db.get_profile(user_id)
+        if not profile or folder_name not in profile.get("folders", {}):
             await ctx.send(f"❌ Folder '{folder_name}' does not exist.")
             return
 
@@ -98,32 +101,37 @@ class FolderCommands(commands.Cog):
             response = await self.bot.wait_for('message', timeout=60.0, check=check)
             user_id = str(ctx.author.id)
             
+            profile = db.get_profile(user_id)
+            if not profile:
+                await ctx.send("❌ Folder not found.")
+                return
+
             if field == 'color':
                 # Validate hex color
                 color_value = response.content.strip()
                 if not color_value.startswith('#') or len(color_value) != 7:
                     await ctx.send("❌ Invalid color format. Please use hex format like #FF5733")
                     return
-                global_profiles[user_id]["folders"][folder_name][field] = color_value
+                profile["folders"][folder_name][field] = color_value
             elif field == 'name':
                 # Handle folder rename
                 new_name = response.content.strip()
                 if new_name != folder_name:
                     # Check if new name already exists
-                    if new_name in global_profiles[user_id]["folders"]:
+                    if new_name in profile["folders"]:
                         await ctx.send(f"❌ A folder with the name '{new_name}' already exists.")
                         return
                     # Rename the folder
-                    folder_data = global_profiles[user_id]["folders"].pop(folder_name)
+                    folder_data = profile["folders"].pop(folder_name)
                     folder_data['name'] = new_name
-                    global_profiles[user_id]["folders"][new_name] = folder_data
+                    profile["folders"][new_name] = folder_data
                     folder_name = new_name  # Update for success message
                 else:
-                    global_profiles[user_id]["folders"][folder_name][field] = new_name
+                    profile["folders"][folder_name][field] = new_name
             else:
-                global_profiles[user_id]["folders"][folder_name][field] = response.content.strip()
+                profile["folders"][folder_name][field] = response.content.strip()
             
-            save_profiles(global_profiles)
+            db.save_profile(user_id, profile)
             await ctx.send(f"✅ Folder {field} updated successfully!")
             
         except asyncio.TimeoutError:
@@ -132,9 +140,11 @@ class FolderCommands(commands.Cog):
     @commands.command(name="delete_folder")
     async def delete_folder(self, ctx, *, folder_name: str):
         """Delete a folder."""
+        
         user_id = str(ctx.author.id)
 
-        if folder_name not in global_profiles.get(user_id, {}).get("folders", {}):
+        profile = db.get_profile(user_id)
+        if not profile or folder_name not in profile.get("folders", {}):
             await ctx.send(f"❌ Folder '{folder_name}' does not exist.")
             return
 
@@ -153,28 +163,30 @@ class FolderCommands(commands.Cog):
             return user == ctx.author and reaction.message.id == message.id and str(reaction.emoji) in ['✅', '❌']
 
         try:
-            reaction, user = await self.bot.wait_for('reaction_add', timeout=30.0, check=check)
+            reaction, user = await self.bot.wait_for('reaction_add', timeout=60.0, check=check)
             
             if str(reaction.emoji) == '✅':
-                del global_profiles[user_id]["folders"][folder_name]
-                save_profiles(global_profiles)
-                await ctx.send(f"🗑️ Folder '{folder_name}' deleted successfully!")
+                del profile["folders"][folder_name]
+                db.save_profile(user_id, profile)
+                await ctx.send(f"✅ Folder '{folder_name}' has been deleted.")
             else:
                 await ctx.send("❌ Deletion cancelled.")
                 
         except asyncio.TimeoutError:
-            await ctx.send("⏰ Confirmation timed out. Deletion cancelled.")
+            await ctx.send("⏰ Deletion timed out.")
 
     @commands.command(name="show_folder")
     async def show_folder(self, ctx, *, folder_name: str):
         """Show the contents of a folder."""
+        
         user_id = str(ctx.author.id)
 
-        if folder_name not in global_profiles.get(user_id, {}).get("folders", {}):
+        profile = db.get_profile(user_id)
+        if not profile or folder_name not in profile.get("folders", {}):
             await ctx.send(f"❌ Folder '{folder_name}' does not exist.")
             return
 
-        folder_data = global_profiles[user_id]["folders"][folder_name]
+        folder_data = profile["folders"][folder_name]
         
         # Use folder's color or default
         color = int(folder_data.get('color', '0x8A2BE2'), 16) if folder_data.get('color') else 0x8A2BE2
@@ -198,17 +210,12 @@ class FolderCommands(commands.Cog):
             # Get alter display names
             alter_list = []
             for alter_name in alters_in_folder:
-                alter_data = global_profiles[user_id]["alters"].get(alter_name, {})
-                display_name = alter_data.get('displayname', alter_name)
-                alter_list.append(display_name)
+                if alter_name in profile["alters"]:
+                    display_name = profile["alters"][alter_name].get('displayname', alter_name)
+                    alter_list.append(display_name)
             
-            embed.add_field(
-                name=f"👥 Alters ({len(alters_in_folder)})",
-                value=", ".join(alter_list),
-                inline=False
-            )
-        else:
-            embed.add_field(name="👥 Alters", value="No alters in this folder", inline=False)
+            if alter_list:
+                embed.add_field(name=f"👥 Alters ({len(alter_list)})", value="\n".join(alter_list), inline=False)
 
         # Icon
         if folder_data.get('icon'):
@@ -222,141 +229,128 @@ class FolderCommands(commands.Cog):
 
     @commands.command(name="add_alters")
     async def add_alters(self, ctx, folder_name: str, *, alter_names: str):
-        """Add one or more alters to a folder."""
+        """Add alters to a folder."""
+        
         user_id = str(ctx.author.id)
 
-        if folder_name not in global_profiles.get(user_id, {}).get("folders", {}):
+        profile = db.get_profile(user_id)
+        if not profile or folder_name not in profile.get("folders", {}):
             await ctx.send(f"❌ Folder '{folder_name}' does not exist.")
             return
 
-        # Parse alter names (split by comma)
-        alter_list = [name.strip() for name in alter_names.split(',')]
+        # Split alter names by commas and clean up whitespace
+        alter_list = [name.strip() for name in alter_names.split(",")]
         
-        added_alters = []
-        failed_alters = []
-        already_in_folder = []
-
+        # Process each alter
+        added = []
+        skipped = []
+        not_found = []
+        
         for alter_name in alter_list:
-            actual_name = find_alter_by_name(user_id, alter_name)
+            actual_name = find_alter_by_name(profile, alter_name)
             if not actual_name:
-                failed_alters.append(alter_name)
+                not_found.append(alter_name)
                 continue
-            
-            folder_alters = global_profiles[user_id]["folders"][folder_name]["alters"]
-            if actual_name in folder_alters:
-                already_in_folder.append(actual_name)
+                
+            if actual_name in profile["folders"][folder_name]["alters"]:
+                skipped.append(actual_name)
                 continue
+                
+            profile["folders"][folder_name]["alters"].append(actual_name)
+            added.append(actual_name)
+
+        # Save changes if any alters were added
+        if added:
+            db.save_profile(user_id, profile)
+
+        # Create response embed
+        embed = discord.Embed(
+            title=f"📁 Folder Update: {folder_name}",
+            color=0x8A2BE2
+        )
+        
+        if added:
+            embed.add_field(name="✅ Added", value="\n".join(added), inline=False)
+        if skipped:
+            embed.add_field(name="⏭️ Already in folder", value="\n".join(skipped), inline=False)
+        if not_found:
+            embed.add_field(name="❌ Not found", value="\n".join(not_found), inline=False)
             
-            folder_alters.append(actual_name)
-            added_alters.append(actual_name)
-
-        save_profiles(global_profiles)
-
-        # Build response message
-        embed = discord.Embed(title=f"📁 Folder: {folder_name}", color=0x8A2BE2)
-        
-        if added_alters:
-            embed.add_field(
-                name="✅ Added Alters",
-                value=", ".join(added_alters),
-                inline=False
-            )
-        
-        if already_in_folder:
-            embed.add_field(
-                name="⚠️ Already in Folder",
-                value=", ".join(already_in_folder),
-                inline=False
-            )
-        
-        if failed_alters:
-            embed.add_field(
-                name="❌ Not Found",
-                value=", ".join(failed_alters),
-                inline=False
-            )
-
         await ctx.send(embed=embed)
 
     @commands.command(name="remove_alters")
     async def remove_alters(self, ctx, folder_name: str, *, alter_names: str):
-        """Remove one or more alters from a folder."""
+        """Remove alters from a folder."""
+        
         user_id = str(ctx.author.id)
 
-        if folder_name not in global_profiles.get(user_id, {}).get("folders", {}):
+        profile = db.get_profile(user_id)
+        if not profile or folder_name not in profile.get("folders", {}):
             await ctx.send(f"❌ Folder '{folder_name}' does not exist.")
             return
 
-        # Parse alter names (split by comma)
-        alter_list = [name.strip() for name in alter_names.split(',')]
+        # Split alter names by commas and clean up whitespace
+        alter_list = [name.strip() for name in alter_names.split(",")]
         
-        removed_alters = []
+        # Process each alter
+        removed = []
         not_in_folder = []
         not_found = []
-
+        
         for alter_name in alter_list:
-            actual_name = find_alter_by_name(user_id, alter_name)
+            actual_name = find_alter_by_name(profile, alter_name)
             if not actual_name:
                 not_found.append(alter_name)
                 continue
-            
-            folder_alters = global_profiles[user_id]["folders"][folder_name]["alters"]
-            if actual_name not in folder_alters:
+                
+            if actual_name not in profile["folders"][folder_name]["alters"]:
                 not_in_folder.append(actual_name)
                 continue
-            
-            folder_alters.remove(actual_name)
-            removed_alters.append(actual_name)
+                
+            profile["folders"][folder_name]["alters"].remove(actual_name)
+            removed.append(actual_name)
 
-        save_profiles(global_profiles)
+        # Save changes if any alters were removed
+        if removed:
+            db.save_profile(user_id, profile)
 
-        # Build response message
-        embed = discord.Embed(title=f"📁 Folder: {folder_name}", color=0x8A2BE2)
+        # Create response embed
+        embed = discord.Embed(
+            title=f"📁 Folder Update: {folder_name}",
+            color=0x8A2BE2
+        )
         
-        if removed_alters:
-            embed.add_field(
-                name="✅ Removed Alters",
-                value=", ".join(removed_alters),
-                inline=False
-            )
-        
+        if removed:
+            embed.add_field(name="✅ Removed", value="\n".join(removed), inline=False)
         if not_in_folder:
-            embed.add_field(
-                name="⚠️ Not in Folder",
-                value=", ".join(not_in_folder),
-                inline=False
-            )
-        
+            embed.add_field(name="⏭️ Not in folder", value="\n".join(not_in_folder), inline=False)
         if not_found:
-            embed.add_field(
-                name="❌ Not Found",
-                value=", ".join(not_found),
-                inline=False
-            )
-
+            embed.add_field(name="❌ Not found", value="\n".join(not_found), inline=False)
+            
         await ctx.send(embed=embed)
 
     @commands.command(name="wipe_folder_alters")
     async def wipe_folder_alters(self, ctx, *, folder_name: str):
         """Remove all alters from a folder."""
+        
         user_id = str(ctx.author.id)
 
-        if folder_name not in global_profiles.get(user_id, {}).get("folders", {}):
+        profile = db.get_profile(user_id)
+        if not profile or folder_name not in profile.get("folders", {}):
             await ctx.send(f"❌ Folder '{folder_name}' does not exist.")
             return
 
-        folder_data = global_profiles[user_id]["folders"][folder_name]
-        alters_count = len(folder_data.get("alters", []))
-
-        if alters_count == 0:
-            await ctx.send(f"📁 Folder '{folder_name}' is already empty.")
+        # Get current alter count
+        alter_count = len(profile["folders"][folder_name].get("alters", []))
+        if alter_count == 0:
+            await ctx.send(f"❌ Folder '{folder_name}' is already empty.")
             return
 
         # Confirmation
         embed = discord.Embed(
-            title="⚠️ Wipe Folder Alters",
-            description=f"Are you sure you want to remove all **{alters_count}** alters from the folder **{folder_name}**?\n\nReact with ✅ to confirm or ❌ to cancel.",
-            color=0xFF9900
+            title="⚠️ Wipe Folder",
+            description=f"Are you sure you want to remove all {alter_count} alter(s) from folder **{folder_name}**?\n\nReact with ✅ to confirm or ❌ to cancel.",
+            color=0xFF0000
         )
         message = await ctx.send(embed=embed)
         
@@ -367,48 +361,62 @@ class FolderCommands(commands.Cog):
             return user == ctx.author and reaction.message.id == message.id and str(reaction.emoji) in ['✅', '❌']
 
         try:
-            reaction, user = await self.bot.wait_for('reaction_add', timeout=30.0, check=check)
+            reaction, user = await self.bot.wait_for('reaction_add', timeout=60.0, check=check)
             
             if str(reaction.emoji) == '✅':
-                global_profiles[user_id]["folders"][folder_name]["alters"] = []
-                save_profiles(global_profiles)
-                await ctx.send(f"🧹 All alters removed from folder '{folder_name}'!")
+                profile["folders"][folder_name]["alters"] = []
+                db.save_profile(user_id, profile)
+                await ctx.send(f"✅ Removed all alters from folder '{folder_name}'.")
             else:
-                await ctx.send("❌ Wipe cancelled.")
+                await ctx.send("❌ Operation cancelled.")
                 
         except asyncio.TimeoutError:
-            await ctx.send("⏰ Confirmation timed out. Wipe cancelled.")
+            await ctx.send("⏰ Operation timed out.")
 
     @commands.command(name="list_folders")
     async def list_folders(self, ctx):
-        """List all folders in the current system."""
+        """List all folders and their contents."""
+        
         user_id = str(ctx.author.id)
 
-        if user_id not in global_profiles or not global_profiles[user_id].get("folders"):
+        profile = db.get_profile(user_id)
+        if not profile or not profile.get("folders"):
             await ctx.send("❌ You don't have any folders. Use `!create_folder <name>` to create one.")
             return
 
-        folders = global_profiles[user_id]["folders"]
+        folders = profile["folders"]
         
         embed = discord.Embed(
-            title="📁 Your Folders",
+            title="📂 Your Folders",
             description=f"Total: {len(folders)} folder(s)",
             color=0x8A2BE2
         )
 
-        for i, (folder_name, folder_data) in enumerate(folders.items(), 1):
-            alters_count = len(folder_data.get('alters', []))
+        for folder_name, folder_data in folders.items():
+            # Safety check for folder_data
+            if not folder_data or not isinstance(folder_data, dict):
+                continue
+                
+            # Get number of alters in folder
+            alter_count = len(folder_data.get('alters', []))
+            
+            # Get description preview
             description = folder_data.get('description', 'No description')
-            if len(description) > 50:
-                description = description[:47] + "..."
+            if description and len(description) > 100:
+                description = description[:97] + "..."
+            elif not description:
+                description = 'No description'
+                
+            value = f"📝 {description}\n👥 {alter_count} alter(s)"
             
             embed.add_field(
-                name=f"{i}. {folder_name}",
-                value=f"Alters: {alters_count} • {description}",
+                name=f"📁 {folder_name}",
+                value=value,
                 inline=False
             )
 
         await ctx.send(embed=embed)
 
 async def setup(bot):
+    """Set up the folders cog."""
     await bot.add_cog(FolderCommands(bot))
