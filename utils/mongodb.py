@@ -39,7 +39,10 @@ class MongoDB:
             # Create client with SSL configuration
             self.client = MongoClient(
                 uri,
-                ssl_context=ssl_context,
+                tls=True,  # Explicitly enable TLS
+                tlsCAFile=ssl.get_default_verify_paths().cafile, # Use default CA file
+                tlsAllowInvalidCertificates=True, # Temporarily allow for testing
+                tlsAllowInvalidHostnames=True, # Temporarily allow for testing
                 serverSelectionTimeoutMS=30000,
                 connectTimeoutMS=30000,
                 socketTimeoutMS=30000,

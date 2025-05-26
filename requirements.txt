@@ -13,3 +13,4 @@ urllib3>=2.1.0
 websockets>=12.0
 yarl>=1.9.4
 flask>=2.3.0
+certifi>=2024.7.4
