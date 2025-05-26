@@ -17,6 +17,8 @@ class ProxyCommands(commands.Cog):
         self.bot = bot
         self.proxy_cache = {}  # Cache proxy settings for performance
         self.autoproxy_settings = {}  # Store autoproxy user preferences
+
+        
         self.message_map = {}  # Map proxied message IDs to original author IDs
         self._session = None  # aiohttp session
         self._webhook_cache = {}  # Cache webhooks
@@ -41,43 +43,51 @@ class ProxyCommands(commands.Cog):
 
     async def initialize_cache(self):
         """Initialize cache from the database to speed up proxy matching."""
-        # Connect to MongoDB
-        db.connect()
-        
-        # Get all profiles
-        cursor = db.profiles.find({})
-        for user_data in cursor:
-            user_id = user_data.get('user_id')
-            if not user_id or user_id == "_meta":
-                continue
-                
-            # Preprocess all proxy patterns for this user
-            user_proxies = []
-            for alter_name, alter_data in user_data.get("alters", {}).items():
-                if proxy_tag := alter_data.get("proxy"):
-                    # Parse the proxy pattern
-                    prefix, suffix = self.parse_proxy_pattern(proxy_tag)
-                    user_proxies.append({
-                        "name": alter_name,
-                        "prefix": prefix,
-                        "suffix": suffix,
-                        "display_name": alter_data.get("displayname", alter_name),
-                        "avatar": alter_data.get("proxy_avatar") or alter_data.get("avatar"),
-                        "proxy_tag": proxy_tag
-                    })
+        try:
+            # Connect to MongoDB
+            db.connect()
             
-            if user_proxies:
-                self.proxy_cache[user_id] = user_proxies
+            # Get all profiles
+            cursor = db.profiles.find({})
+            for user_data in cursor:
+                user_id = user_data.get('user_id')
+                if not user_id or user_id == "_meta":
+                    continue
+                    
+                # Preprocess all proxy patterns for this user
+                user_proxies = []
+                for alter_name, alter_data in user_data.get("alters", {}).items():
+                    if proxy_tag := alter_data.get("proxy"):
+                        # Parse the proxy pattern
+                        prefix, suffix = self.parse_proxy_pattern(proxy_tag)
+                        user_proxies.append({
+                            "name": alter_name,
+                            "prefix": prefix,
+                            "suffix": suffix,
+                            "display_name": alter_data.get("displayname", alter_name),
+                            "avatar": alter_data.get("proxy_avatar") or alter_data.get("avatar"),
+                            "proxy_tag": proxy_tag
+                        })
                 
-        # Load autoproxy settings
-        cursor = db.autoproxy.find({})
-        for settings in cursor:
-            user_id = settings.get('user_id')
-            if user_id:
-                self.autoproxy_settings[user_id] = settings
+                if user_proxies:
+                    self.proxy_cache[user_id] = user_proxies
+                    
+            # Load autoproxy settings
+            cursor = db.autoproxy.find({})
+            for settings in cursor:
+                user_id = settings.get('user_id')
+                if user_id:
+                    self.autoproxy_settings[user_id] = settings
 
-        # Start webhook cleanup task
-        self._webhook_cleanup_task = asyncio.create_task(self._cleanup_webhooks_periodically())
+            # Start webhook cleanup task
+            self._webhook_cleanup_task = asyncio.create_task(self._cleanup_webhooks_periodically())
+            
+            logger.info("✅ Proxy cache initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize proxy cache: {e}")
+            logger.info("🔄 Proxy cog will continue without cache - features may be limited until database connection is restored")
+            # Don't raise the exception - allow the cog to load without cache
 
     async def _cleanup_webhooks_periodically(self):
         """Periodically clean up old webhooks from cache."""
@@ -671,7 +681,12 @@ class ProxyCommands(commands.Cog):
         """Find a matching proxy for the message."""
         user_id = str(message.author.id)
         guild_id = str(message.guild.id)
-        profile = db.get_profile(user_id)
+        
+        try:
+            profile = db.get_profile(user_id)
+        except Exception as e:
+            logger.error(f"Failed to get profile for {user_id}: {e}")
+            return None, None
         
         if not profile or not profile.get("alters"):
             return None, None
@@ -679,25 +694,28 @@ class ProxyCommands(commands.Cog):
         content = message.content
         
         # Check autoproxy first (server-specific)
-        autoproxy_key = f"{user_id}_{guild_id}"
-        autoproxy_settings = db.get_autoproxy(autoproxy_key)
-        if autoproxy_settings.get("enabled"):
-            mode = autoproxy_settings.get("mode")
-            if mode == "latch" and autoproxy_settings.get("last_alter"):
-                alter_name = autoproxy_settings["last_alter"]
-                if alter_name in profile["alters"]:
-                    logger.info(f"Using latch autoproxy for {alter_name} in guild {guild_id}")
-                    return profile["alters"][alter_name], alter_name
-            elif mode == "front" and autoproxy_settings.get("fronter"):
-                alter_name = autoproxy_settings["fronter"]
-                if alter_name in profile["alters"]:
-                    logger.info(f"Using front autoproxy for {alter_name} in guild {guild_id}")
-                    return profile["alters"][alter_name], alter_name
-            elif mode == "member" and autoproxy_settings.get("member"):
-                alter_name = autoproxy_settings["member"]
-                if alter_name in profile["alters"]:
-                    logger.info(f"Using member autoproxy for {alter_name} in guild {guild_id}")
-                    return profile["alters"][alter_name], alter_name
+        try:
+            autoproxy_key = f"{user_id}_{guild_id}"
+            autoproxy_settings = db.get_autoproxy(autoproxy_key)
+            if autoproxy_settings.get("enabled"):
+                mode = autoproxy_settings.get("mode")
+                if mode == "latch" and autoproxy_settings.get("last_alter"):
+                    alter_name = autoproxy_settings["last_alter"]
+                    if alter_name in profile["alters"]:
+                        logger.info(f"Using latch autoproxy for {alter_name} in guild {guild_id}")
+                        return profile["alters"][alter_name], alter_name
+                elif mode == "front" and autoproxy_settings.get("fronter"):
+                    alter_name = autoproxy_settings["fronter"]
+                    if alter_name in profile["alters"]:
+                        logger.info(f"Using front autoproxy for {alter_name} in guild {guild_id}")
+                        return profile["alters"][alter_name], alter_name
+                elif mode == "member" and autoproxy_settings.get("member"):
+                    alter_name = autoproxy_settings["member"]
+                    if alter_name in profile["alters"]:
+                        logger.info(f"Using member autoproxy for {alter_name} in guild {guild_id}")
+                        return profile["alters"][alter_name], alter_name
+        except Exception as e:
+            logger.error(f"Failed to check autoproxy settings: {e}")
         
         # Check manual proxy patterns
         for alter_name, alter_data in profile["alters"].items():
@@ -712,9 +730,20 @@ class ProxyCommands(commands.Cog):
                 
         return None, None
 
+    async def retry_cache_initialization(self):
+        """Retry cache initialization if it failed during startup."""
+        if not self.proxy_cache and not self.autoproxy_settings:
+            logger.info("🔄 Retrying proxy cache initialization...")
+            await self.initialize_cache()
+
 async def setup(bot):
     """Set up the proxy cog."""
     cog = ProxyCommands(bot)
-    await cog.initialize_cache()
+    try:
+        await cog.initialize_cache()
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize proxy cache during setup: {e}")
+        logger.info("🔄 Proxy cog loaded without cache - will retry connection later")
+    
     await bot.add_cog(cog)
     print("✅ Proxy cog loaded successfully")

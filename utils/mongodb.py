@@ -5,6 +5,7 @@ from pymongo.database import Database
 from pymongo.collection import Collection
 from datetime import datetime
 import logging
+import ssl
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -30,7 +31,25 @@ class MongoDB:
             raise ValueError("MONGODB_URI environment variable not set")
 
         try:
-            self.client = MongoClient(uri)
+            # Configure SSL context for better compatibility
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+            
+            # Create client with SSL configuration
+            self.client = MongoClient(
+                uri,
+                ssl_context=ssl_context,
+                serverSelectionTimeoutMS=30000,
+                connectTimeoutMS=30000,
+                socketTimeoutMS=30000,
+                maxPoolSize=10,
+                retryWrites=True
+            )
+            
+            # Test the connection
+            self.client.admin.command('ping')
+            
             self.db = self.client.pixel_bot
             
             # Initialize collections
