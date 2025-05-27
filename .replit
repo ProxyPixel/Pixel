@@ -1,5 +1,0 @@
-language = "python3"
-
-run = ["python3", "-u", "main.py"]
-
-# Replit automatically installs from requirements.txt, no build command needed
