@@ -41,28 +41,15 @@ class MongoDB:
             return 
 
         try:
-            # Create an SSLContext that explicitly uses TLSv1.2
-            # MongoDB Atlas generally requires TLS 1.2+
-            context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-            context.minimum_version = ssl.TLSVersion.TLSv1_2
-            # Optionally, you can set specific ciphers if needed, e.g.:
-            # context.set_ciphers('ECDHE+AESGCM:CHACHA20') 
-            # Using default ciphers for TLSv1.2 should be fine usually.
-
-            # The following are often used for debugging but reduce security.
-            # Use with caution and ideally not in production.
-            # context.check_hostname = False
-            # context.verify_mode = ssl.CERT_NONE
-            
             logger.info(f"Attempting to connect to MongoDB with URI: {uri[:uri.find(':')+3]}...{uri[-20:]}")
 
             self.client = MongoClient(
                 uri,
-                ssl_context=context, # Use the custom SSL context
+                tls=True,  # Use tls=True instead of ssl_context
                 serverSelectionTimeoutMS=30000,
                 connectTimeoutMS=30000,
                 socketTimeoutMS=30000,
-                maxPoolSize=20, # Slightly increased pool size
+                maxPoolSize=20,
                 retryWrites=True,
                 retryReads=True
             )
@@ -102,14 +89,14 @@ class MongoDB:
 
     def get_profile(self, user_id: str) -> Optional[Dict[str, Any]]:
         """Get a user's profile data."""
-        if not self.db or not self.profiles: 
+        if self.db is None or self.profiles is None: 
             logger.warning("Attempted to get_profile but MongoDB is not connected.")
             return None
         return self.profiles.find_one({"user_id": user_id})
 
     def save_profile(self, user_id: str, data: Dict[str, Any]) -> None:
         """Save a user's profile data."""
-        if not self.db or not self.profiles: 
+        if self.db is None or self.profiles is None: 
             logger.warning("Attempted to save_profile but MongoDB is not connected.")
             return
         data["updated_at"] = datetime.utcnow()
@@ -121,7 +108,7 @@ class MongoDB:
 
     def delete_profile(self, user_id: str) -> None:
         """Delete a user's profile."""
-        if not self.db or not self.profiles or not self.autoproxy: 
+        if self.db is None or self.profiles is None or self.autoproxy is None: 
             logger.warning("Attempted to delete_profile but MongoDB is not connected.")
             return
         self.profiles.delete_one({"user_id": user_id})
@@ -129,7 +116,7 @@ class MongoDB:
 
     def get_autoproxy(self, user_id: str) -> Dict[str, Any]:
         """Get a user's autoproxy settings."""
-        if not self.db or not self.autoproxy: 
+        if self.db is None or self.autoproxy is None: 
             logger.warning("Attempted to get_autoproxy but MongoDB is not connected.")
             return {"mode": "off"} # Return default if not connected
         settings = self.autoproxy.find_one({"user_id": user_id})
@@ -137,7 +124,7 @@ class MongoDB:
 
     def save_autoproxy(self, user_id: str, settings: Dict[str, Any]) -> None:
         """Save a user's autoproxy settings."""
-        if not self.db or not self.autoproxy: 
+        if self.db is None or self.autoproxy is None: 
             logger.warning("Attempted to save_autoproxy but MongoDB is not connected.")
             return
         settings["updated_at"] = datetime.utcnow()
@@ -149,7 +136,7 @@ class MongoDB:
 
     def get_blacklist(self, guild_id: str) -> Dict[str, Any]:
         """Get a guild's blacklist settings."""
-        if not self.db or not self.blacklists: 
+        if self.db is None or self.blacklists is None: 
             logger.warning("Attempted to get_blacklist but MongoDB is not connected.")
             return {"channels": [], "categories": []} # Return default if not connected
         blacklist = self.blacklists.find_one({"guild_id": guild_id})
@@ -157,7 +144,7 @@ class MongoDB:
 
     def save_blacklist(self, guild_id: str, data: Dict[str, Any]) -> None:
         """Save a guild's blacklist settings."""
-        if not self.db or not self.blacklists: 
+        if self.db is None or self.blacklists is None: 
             logger.warning("Attempted to save_blacklist but MongoDB is not connected.")
             return
         data["updated_at"] = datetime.utcnow()
@@ -169,7 +156,7 @@ class MongoDB:
 
     def get_webhook(self, channel_id: int, guild_id: int) -> Optional[Dict[str, Any]]:
         """Get webhook info for a channel."""
-        if not self.db or not self.webhooks: 
+        if self.db is None or self.webhooks is None: 
             logger.warning("Attempted to get_webhook but MongoDB is not connected.")
             return None
         return self.webhooks.find_one({
@@ -179,7 +166,7 @@ class MongoDB:
 
     def save_webhook(self, channel_id: int, guild_id: int, webhook_id: int, webhook_token: str) -> None:
         """Save webhook info for a channel."""
-        if not self.db or not self.webhooks: 
+        if self.db is None or self.webhooks is None: 
             logger.warning("Attempted to save_webhook but MongoDB is not connected.")
             return
         self.webhooks.update_one(
@@ -199,7 +186,7 @@ class MongoDB:
 
     def delete_webhook(self, channel_id: int, guild_id: int) -> None:
         """Delete webhook info for a channel."""
-        if not self.db or not self.webhooks: 
+        if self.db is None or self.webhooks is None: 
             logger.warning("Attempted to delete_webhook but MongoDB is not connected.")
             return
         self.webhooks.delete_one({
@@ -209,7 +196,7 @@ class MongoDB:
 
     def record_switch(self, user_id: str, alter_id: str) -> None:
         """Record a switch event."""
-        if not self.db or not self.switches: 
+        if self.db is None or self.switches is None: 
             logger.warning("Attempted to record_switch but MongoDB is not connected.")
             return
         self.switches.insert_one({
@@ -220,7 +207,7 @@ class MongoDB:
 
     def get_recent_switches(self, user_id: str, limit: int = 10) -> List[Dict[str, Any]]:
         """Get recent switches for a user."""
-        if not self.db or not self.switches: 
+        if self.db is None or self.switches is None: 
             logger.warning("Attempted to get_recent_switches but MongoDB is not connected.")
             return [] # Return empty list if not connected
         return list(self.switches.find(

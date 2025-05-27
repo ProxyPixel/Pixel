@@ -37,18 +37,26 @@ def find_alter_by_name(profile: Dict[str, Any], search_name: str) -> Optional[st
     for name, data in profile["alters"].items():
         if name.lower() == search_name:
             return name
-        if data.get("displayname", "").lower() == search_name:
+        # Ensure displayname is treated as string even if None
+        displayname = data.get("displayname") or ""
+        if displayname.lower() == search_name:
             return name
-        if search_name in [alias.lower() for alias in data.get("aliases", [])]:
+        # Ensure aliases is a list and handle None values
+        aliases = data.get("aliases") or []
+        if search_name in [alias.lower() for alias in aliases if alias]:
             return name
 
     # Then try partial match
     for name, data in profile["alters"].items():
         if search_name in name.lower():
             return name
-        if search_name in data.get("displayname", "").lower():
+        # Ensure displayname is treated as string even if None
+        displayname = data.get("displayname") or ""
+        if search_name in displayname.lower():
             return name
-        if any(search_name in alias.lower() for alias in data.get("aliases", [])):
+        # Ensure aliases is a list and handle None values
+        aliases = data.get("aliases") or []
+        if any(search_name in alias.lower() for alias in aliases if alias):
             return name
 
     return None

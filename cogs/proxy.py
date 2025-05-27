@@ -176,30 +176,51 @@ class ProxyCommands(commands.Cog):
                 return None
 
     def parse_proxy_pattern(self, proxy_pattern: str) -> Tuple[Optional[str], Optional[str]]:
-        """Parse a proxy pattern to determine prefix, suffix, or both."""
+        """Parse a proxy pattern to determine prefix, suffix, or both.
+        
+        Supports all types of characters including:
+        - Text: A: TEXT, TEXT :A
+        - Symbols: [TEXT], (TEXT), *TEXT*
+        - Emojis: 🌟 TEXT, TEXT 💫, 🔥TEXT🔥
+        - Mixed: A🌟 TEXT, TEXT :)
+        """
         if not proxy_pattern:
             return None, None
+        
+        # Clean up any None suffixes that might have been added during import
+        if proxy_pattern.endswith("None"):
+            proxy_pattern = proxy_pattern.replace("None", "")
             
         # Match PluralKit's TEXT placeholder format
         if "TEXT" in proxy_pattern:
-            parts = proxy_pattern.split("TEXT")
+            parts = proxy_pattern.split("TEXT", 1)  # Split only on first occurrence
             if len(parts) == 2:
-                return parts[0].strip(), parts[1].strip()
+                prefix = parts[0] if parts[0] else None
+                suffix = parts[1] if parts[1] else None
+                return prefix, suffix
                 
         # For text: format (common in other bots)
-        if "text" in proxy_pattern and ":" in proxy_pattern:
+        if "text" in proxy_pattern.lower() and ":" in proxy_pattern:
             parts = proxy_pattern.split(":", 1)
-            return f"{parts[0]}:", ""
+            return f"{parts[0]}:", None
             
         # Default behavior: treat as prefix if suffix not specified
-        return proxy_pattern.strip(), ""
+        # This handles cases like just "A:" or "🌟" as prefix-only
+        return proxy_pattern.strip(), None
 
     @commands.command(name="set_proxy")
     async def set_proxy(self, ctx, alter_name: str = None, *, proxy_tag: str = None):
-        """Set proxy tags for an alter."""
+        """Set proxy tags for an alter. Supports text, symbols, and emojis!"""
         
         if not alter_name or not proxy_tag:
-            await ctx.send("❌ Usage: `!set_proxy <alter_name> <proxy_tag>`\nExample: `!set_proxy Alex A: TEXT` or `!set_proxy Alex TEXT :A`")
+            await ctx.send("❌ Usage: `!set_proxy <alter_name> <proxy_tag>`\n"
+                          "**Examples:**\n"
+                          "• `!set_proxy Alex A: TEXT` (prefix)\n"
+                          "• `!set_proxy Alex TEXT :A` (suffix)\n"
+                          "• `!set_proxy Alex [TEXT]` (brackets)\n"
+                          "• `!set_proxy Alex 🌟 TEXT` (emoji prefix)\n"
+                          "• `!set_proxy Alex TEXT 💫` (emoji suffix)\n"
+                          "• `!set_proxy Alex 🔥TEXT🔥` (emoji wrap)")
             return
             
         # Get user profile from MongoDB
@@ -215,6 +236,10 @@ class ProxyCommands(commands.Cog):
 
         if "text" in proxy_tag.lower() and "TEXT" not in proxy_tag:
             proxy_tag = proxy_tag.replace("text", "TEXT")
+        
+        # Clean up any None suffixes that might have been added
+        if proxy_tag.endswith("None"):
+            proxy_tag = proxy_tag.replace("None", "")
             
         profile["alters"][actual_name]["proxy"] = proxy_tag
         db.save_profile(str(ctx.author.id), profile)
@@ -229,9 +254,14 @@ class ProxyCommands(commands.Cog):
             example += f"`{suffix}`"
             
         embed = create_embed(
-            title="Proxy Set Successfully",
+            title="✅ Proxy Set Successfully",
             description=f"Proxy for **{alter_name}** has been set to `{proxy_tag}`.\n\nWhen you type: {example}\nThe bot will send a message as: **{alter_name}**",
             color=profile["alters"][actual_name].get("color", 0x8A2BE2)
+        )
+        embed.add_field(
+            name="💡 Pro Tip", 
+            value="You can use emojis, symbols, or any text as proxy triggers!", 
+            inline=False
         )
         await ctx.send(embed=embed)
 
@@ -495,6 +525,10 @@ class ProxyCommands(commands.Cog):
         """Handle incoming messages for proxying."""
         if message.author.bot or message.content.startswith(self.bot.command_prefix):
             return
+        
+        # Check if message is in a guild (not DM)
+        if not message.guild:
+            return
             
         # Use lock to prevent race conditions
         async with self._lock:
@@ -519,12 +553,16 @@ class ProxyCommands(commands.Cog):
             try:
                 # Extract message content
                 content = message.content
-                proxy_pattern = alter_data.get("proxy")
-                if proxy_pattern:
+                is_manual_proxy = alter_data.get("_is_manual_proxy", False)
+                
+                if is_manual_proxy:
+                    # Manual proxy: extract content using the pattern
+                    proxy_pattern = alter_data.get("proxy")
                     prefix, suffix = self.parse_proxy_pattern(proxy_pattern)
                     message_content = self._extract_message_content(content, prefix, suffix)
                     logger.info(f"Extracted content: '{message_content}' from '{content}' using pattern '{proxy_pattern}'")
                 else:
+                    # Autoproxy: use the full message content without extraction
                     message_content = content
                     logger.info(f"Using autoproxy, content: '{message_content}'")
                 
@@ -533,15 +571,17 @@ class ProxyCommands(commands.Cog):
                     logger.warning(f"Empty message content after extraction for {alter_name}")
                     return
                 
-                # Get system tag
+                # Get system tag from profile
                 user_id = str(message.author.id)
                 profile = db.get_profile(user_id)
                 system_tag = ""
                 if profile and profile.get("system") and profile["system"].get("tag"):
-                    system_tag = f" {profile['system']['tag']}"
+                    tag = profile["system"]["tag"].strip()
+                    if tag:  # Only add if tag is not empty
+                        system_tag = f" {tag}"
                 
                 # Build webhook username (alter name + system tag)
-                display_name = alter_data.get("display_name", alter_name)
+                display_name = alter_data.get("displayname") or alter_data.get("display_name") or alter_name
                 webhook_username = display_name + system_tag
                 
                 # Ensure username is within Discord's 80 character limit
@@ -622,7 +662,7 @@ class ProxyCommands(commands.Cog):
                     logger.warning(f"No permission to delete message in {message.channel.name}")
                 
                 # Update autoproxy latch (server-specific)
-                if proxy_pattern:  # Only update latch for manual proxies
+                if is_manual_proxy:  # Only update latch for manual proxies
                     guild_id = str(message.guild.id)
                     autoproxy_key = f"{user_id}_{guild_id}"
                     autoproxy_settings = db.get_autoproxy(autoproxy_key)
@@ -693,7 +733,21 @@ class ProxyCommands(commands.Cog):
             
         content = message.content
         
-        # Check autoproxy first (server-specific)
+        # Check manual proxy patterns FIRST (higher priority)
+        for alter_name, alter_data in profile["alters"].items():
+            proxy_pattern = alter_data.get("proxy")
+            if not proxy_pattern:
+                continue
+                
+            prefix, suffix = self.parse_proxy_pattern(proxy_pattern)
+            if self._check_pattern_match(content, prefix, suffix):
+                logger.info(f"Using manual proxy for {alter_name}")
+                # Return with a flag indicating this is manual proxy
+                alter_data_copy = alter_data.copy()
+                alter_data_copy["_is_manual_proxy"] = True
+                return alter_data_copy, alter_name
+        
+        # Check autoproxy only if no manual proxy matched (server-specific)
         try:
             autoproxy_key = f"{user_id}_{guild_id}"
             autoproxy_settings = db.get_autoproxy(autoproxy_key)
@@ -703,30 +757,26 @@ class ProxyCommands(commands.Cog):
                     alter_name = autoproxy_settings["last_alter"]
                     if alter_name in profile["alters"]:
                         logger.info(f"Using latch autoproxy for {alter_name} in guild {guild_id}")
-                        return profile["alters"][alter_name], alter_name
+                        # Return with a flag indicating this is autoproxy
+                        alter_data_copy = profile["alters"][alter_name].copy()
+                        alter_data_copy["_is_manual_proxy"] = False
+                        return alter_data_copy, alter_name
                 elif mode == "front" and autoproxy_settings.get("fronter"):
                     alter_name = autoproxy_settings["fronter"]
                     if alter_name in profile["alters"]:
                         logger.info(f"Using front autoproxy for {alter_name} in guild {guild_id}")
-                        return profile["alters"][alter_name], alter_name
+                        alter_data_copy = profile["alters"][alter_name].copy()
+                        alter_data_copy["_is_manual_proxy"] = False
+                        return alter_data_copy, alter_name
                 elif mode == "member" and autoproxy_settings.get("member"):
                     alter_name = autoproxy_settings["member"]
                     if alter_name in profile["alters"]:
                         logger.info(f"Using member autoproxy for {alter_name} in guild {guild_id}")
-                        return profile["alters"][alter_name], alter_name
+                        alter_data_copy = profile["alters"][alter_name].copy()
+                        alter_data_copy["_is_manual_proxy"] = False
+                        return alter_data_copy, alter_name
         except Exception as e:
             logger.error(f"Failed to check autoproxy settings: {e}")
-        
-        # Check manual proxy patterns
-        for alter_name, alter_data in profile["alters"].items():
-            proxy_pattern = alter_data.get("proxy")
-            if not proxy_pattern:
-                continue
-                
-            prefix, suffix = self.parse_proxy_pattern(proxy_pattern)
-            if self._check_pattern_match(content, prefix, suffix):
-                logger.info(f"Using manual proxy for {alter_name}")
-                return alter_data, alter_name
                 
         return None, None
 

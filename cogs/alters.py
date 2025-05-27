@@ -74,8 +74,20 @@ class AlterCommands(commands.Cog):
 
         alter_data = profile["alters"][actual_name]
         
+        # Helper function to normalize color format
+        def normalize_color(color_str):
+            if not color_str:
+                return 0x8A2BE2  # Default color
+            # Remove # if present and ensure it's a valid hex color
+            color_clean = color_str.replace('#', '') if color_str.startswith('#') else color_str
+            try:
+                # Validate it's a valid hex color
+                return int(color_clean, 16)
+            except ValueError:
+                return 0x8A2BE2  # Default color
+        
         # Use alter's color or default
-        color = int(alter_data.get('color', '0x8A2BE2'), 16) if alter_data.get('color') else 0x8A2BE2
+        color = normalize_color(alter_data.get('color'))
         
         embed = discord.Embed(
             title=f"👤 {alter_data.get('displayname', actual_name)}",
@@ -91,7 +103,11 @@ class AlterCommands(commands.Cog):
 
         # Proxy info
         if alter_data.get('proxy'):
-            embed.add_field(name="🗨️ Proxy Tags", value=f"`{alter_data['proxy']}`", inline=True)
+            # Clean up the proxy display - remove None suffixes and show proper format
+            proxy_display = alter_data['proxy']
+            if proxy_display.endswith('None'):
+                proxy_display = proxy_display.replace('None', '')
+            embed.add_field(name="🗨️ Proxy Tags", value=f"`{proxy_display}`", inline=True)
 
         # Aliases
         if alter_data.get('aliases'):
@@ -119,35 +135,101 @@ class AlterCommands(commands.Cog):
 
     @commands.command(name="list_profiles")
     async def list_profiles(self, ctx):
-        """List all profiles in the current system."""
+        """List all profiles in the current system with pagination."""
         
         user_id = str(ctx.author.id)
 
         profile = db.get_profile(user_id)
         if not profile or not profile.get("alters"):
-            await ctx.send("❌ You don't have any alters. Use `!create <n> <pronouns>` to create one.")
+            await ctx.send("❌ You don't have any alters. Use `!create <name> <pronouns>` to create one.")
             return
 
         alters = profile["alters"]
+        alter_list = list(alters.items())
         
-        embed = discord.Embed(
-            title="👥 Your Alters",
-            description=f"Total: {len(alters)} alter(s)",
-            color=0x8A2BE2
-        )
-
-        for i, (name, data) in enumerate(alters.items(), 1):
-            display_name = data.get('displayname', name)
-            pronouns = data.get('pronouns', 'Not set')
-            proxy_info = f" • Proxy: `{data['proxy']}`" if data.get('proxy') else ""
+        # Pagination settings
+        per_page = 10  # Show 10 alters per page
+        total_pages = (len(alter_list) + per_page - 1) // per_page
+        current_page = 1
+        
+        def create_page_embed(page_num):
+            start_idx = (page_num - 1) * per_page
+            end_idx = min(start_idx + per_page, len(alter_list))
             
-            embed.add_field(
-                name=f"{i}. {display_name}",
-                value=f"Pronouns: {pronouns}{proxy_info}",
-                inline=False
+            embed = discord.Embed(
+                title="👥 Your Alters",
+                description=f"Total: {len(alters)} alter(s) • Page {page_num}/{total_pages}",
+                color=0x8A2BE2
             )
 
-        await ctx.send(embed=embed)
+            for i in range(start_idx, end_idx):
+                name, data = alter_list[i]
+                display_name = data.get('displayname') or name
+                pronouns = data.get('pronouns') or 'Not set'
+                proxy_info = f" • Proxy: `{data['proxy']}`" if data.get('proxy') else ""
+                
+                embed.add_field(
+                    name=f"{i + 1}. {display_name}",
+                    value=f"Pronouns: {pronouns}{proxy_info}",
+                    inline=False
+                )
+            
+            if total_pages > 1:
+                embed.set_footer(text=f"Use ⬅️ and ➡️ to navigate pages")
+            
+            return embed
+
+        # Send initial embed
+        embed = create_page_embed(current_page)
+        message = await ctx.send(embed=embed)
+        
+        # Add reactions for pagination if there are multiple pages AND we're in a guild
+        if total_pages > 1 and ctx.guild:
+            await message.add_reaction('⬅️')
+            await message.add_reaction('➡️')
+            
+            def check(reaction, user):
+                return (user == ctx.author and 
+                       reaction.message.id == message.id and 
+                       str(reaction.emoji) in ['⬅️', '➡️'])
+            
+            # Handle pagination
+            while True:
+                try:
+                    reaction, user = await self.bot.wait_for('reaction_add', timeout=60.0, check=check)
+                    
+                    if str(reaction.emoji) == '⬅️' and current_page > 1:
+                        current_page -= 1
+                    elif str(reaction.emoji) == '➡️' and current_page < total_pages:
+                        current_page += 1
+                    else:
+                        # Remove the reaction if it's invalid
+                        try:
+                            await message.remove_reaction(reaction.emoji, user)
+                        except discord.Forbidden:
+                            pass  # Can't remove reactions in DMs
+                        continue
+                    
+                    # Update the embed
+                    new_embed = create_page_embed(current_page)
+                    await message.edit(embed=new_embed)
+                    
+                    # Remove the user's reaction
+                    try:
+                        await message.remove_reaction(reaction.emoji, user)
+                    except discord.Forbidden:
+                        pass  # Can't remove reactions in DMs
+                    
+                except asyncio.TimeoutError:
+                    # Remove reactions when timeout
+                    try:
+                        await message.clear_reactions()
+                    except:
+                        pass
+                    break
+        elif total_pages > 1:
+            # In DMs, just send a message about using page numbers
+            await ctx.send(f"📄 This list has {total_pages} pages. Since this is a DM, reactions aren't available. You can use `!list_profiles` again to see the first page.")
 
     @commands.command(name="edit")
     async def edit_alter(self, ctx, *, name: str):
@@ -231,9 +313,22 @@ class AlterCommands(commands.Cog):
             if field == 'color':
                 # Validate hex color
                 color_value = response.content.strip()
+                # Allow colors with or without # prefix
+                if not color_value.startswith('#'):
+                    color_value = '#' + color_value
+                
+                # Validate hex color format
                 if not color_value.startswith('#') or len(color_value) != 7:
-                    await ctx.send("❌ Invalid color format. Please use hex format like #FF5733")
+                    await ctx.send("❌ Invalid color format. Please use hex format like #FF5733 or FF5733")
                     return
+                
+                # Validate it's actually a valid hex color
+                try:
+                    int(color_value[1:], 16)  # Test if it's valid hex
+                except ValueError:
+                    await ctx.send("❌ Invalid hex color. Please use valid hex characters (0-9, A-F)")
+                    return
+                    
                 profile["alters"][alter_name][field] = color_value
             else:
                 profile["alters"][alter_name][field] = response.content.strip()
@@ -360,10 +455,12 @@ class AlterCommands(commands.Cog):
             await ctx.send(f"❌ Alter '{name}' does not exist.")
             return
 
-        if avatar_url:
-            profile["alters"][actual_name]["proxy_avatar"] = avatar_url
+        if avatar_url and avatar_url.strip():
+            # Setting a proxy avatar
+            profile["alters"][actual_name]["proxy_avatar"] = avatar_url.strip()
             await ctx.send(f"✅ Set proxy avatar for {actual_name}.")
         else:
+            # Clearing proxy avatar (no URL provided or empty string)
             profile["alters"][actual_name]["proxy_avatar"] = None
             await ctx.send(f"✅ Cleared proxy avatar for {actual_name}.")
             

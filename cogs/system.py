@@ -57,21 +57,35 @@ class SystemCommands(commands.Cog):
 
     @commands.command(name="system")
     async def show_system(self, ctx):
-        """Show the current system's info, including avatars, banners, and colors."""
+        """Show system information."""
         
         user_id = str(ctx.author.id)
-
+        
         profile = db.get_profile(user_id)
         if not profile or not profile.get("system"):
-            await ctx.send("❌ You don't have a system. Use `!create_system <n>` to create one.")
+            await ctx.send("❌ You don't have a system set up. Use `!create_system <name>` to create one.")
             return
 
         system_data = profile["system"]
         
+        # Helper function to normalize color format
+        def normalize_color(color_str):
+            if not color_str:
+                return 0x8A2BE2  # Default color
+            # Remove # if present and ensure it's a valid hex color
+            color_clean = color_str.replace('#', '') if color_str.startswith('#') else color_str
+            try:
+                # Validate it's a valid hex color
+                return int(color_clean, 16)
+            except ValueError:
+                return 0x8A2BE2  # Default color
+        
         # Create embed with system info
+        color_value = normalize_color(system_data.get('color'))
+        
         embed = discord.Embed(
             title=f"🏷️ {system_data['name']}",
-            color=int(system_data.get('color', '0x8A2BE2'), 16) if system_data.get('color') else 0x8A2BE2
+            color=color_value
         )
 
         # System Tag (name) is already in title
@@ -381,22 +395,50 @@ class SystemCommands(commands.Cog):
             json_data = await attachment.read()
             pk_data = json.loads(json_data)
             
-            # Basic validation
-            if "system" not in pk_data or "members" not in pk_data:
+            # Handle both old and new PluralKit export formats
+            system_info = None
+            members_list = None
+            
+            # Check if it's the new format (system data at root level)
+            if "version" in pk_data and "name" in pk_data and "members" in pk_data:
+                # New format: system data is at root level
+                system_info = pk_data
+                members_list = pk_data["members"]
+            # Check if it's the old format (system data nested under "system" key)
+            elif "system" in pk_data and "members" in pk_data:
+                # Old format: system data is nested
+                system_info = pk_data["system"]
+                members_list = pk_data["members"]
+            else:
                 await ctx.send("❌ Invalid PluralKit export format.")
                 return
                 
             # Convert PluralKit data to our format
             user_id = str(ctx.author.id)
+            
+            # Helper function to normalize color format
+            def normalize_color(color_str):
+                if not color_str:
+                    return None
+                # Remove # if present and ensure it's a valid hex color
+                color_clean = color_str.replace('#', '') if color_str.startswith('#') else color_str
+                try:
+                    # Validate it's a valid hex color
+                    int(color_clean, 16)
+                    return color_clean  # Store without # prefix
+                except ValueError:
+                    return None
+            
             system_data = {
                 "user_id": user_id,
                 "system": {
-                    "name": pk_data["system"].get("name", "Imported System"),
-                    "description": pk_data["system"].get("description"),
-                    "avatar": pk_data["system"].get("avatar_url"),
-                    "banner": None,  # PK doesn't have banners
-                    "pronouns": pk_data["system"].get("pronouns"),
-                    "color": f"#{pk_data['system'].get('color', '8A2BE2')}",
+                    "name": system_info.get("name", "Imported System"),
+                    "description": system_info.get("description"),
+                    "avatar": system_info.get("avatar_url"),
+                    "banner": system_info.get("banner"),  # New PK exports may have banners
+                    "pronouns": system_info.get("pronouns"),
+                    "color": normalize_color(system_info.get('color')),
+                    "tag": system_info.get("tag", ""),  # Import system tag if available
                     "linked_accounts": [ctx.author.name],
                     "system_id": str(uuid.uuid4())[:8],
                     "created_date": datetime.utcnow().isoformat()
@@ -405,23 +447,79 @@ class SystemCommands(commands.Cog):
                 "folders": {}
             }
             
+            # Import PluralKit groups as PIXEL folders
+            groups_list = pk_data.get("groups", [])
+            group_member_map = {}  # Map group IDs to member lists
+            
+            for group in groups_list:
+                folder_id = str(uuid.uuid4())[:8]
+                folder_name = group.get("name", "Imported Group")
+                
+                # Store group members for later mapping
+                group_member_map[group.get("id")] = group.get("members", [])
+                
+                system_data["folders"][folder_name] = {
+                    "id": folder_id,
+                    "description": group.get("description"),
+                    "color": normalize_color(group.get('color')),
+                    "avatar": group.get("icon"),  # PK uses "icon" for group avatars
+                    "banner": group.get("banner"),
+                    "alters": [],  # Will be populated when processing members
+                    "created_date": group.get("created", datetime.utcnow().isoformat())
+                }
+            
             # Convert members to alters
-            for member in pk_data["members"]:
+            for member in members_list:
                 alter_id = str(uuid.uuid4())[:8]
-                system_data["alters"][member["name"]] = {
+                member_id = member.get("id")
+                
+                # Handle proxy tags - PK uses different format
+                proxy_text = None
+                if member.get("proxy_tags"):
+                    # Get the first proxy tag
+                    proxy_tag = member["proxy_tags"][0]
+                    prefix = proxy_tag.get("prefix", "")
+                    suffix = proxy_tag.get("suffix", "")
+                    if prefix or suffix:
+                        proxy_text = f"{prefix}TEXT{suffix}"
+                
+                alter_data = {
                     "id": alter_id,
                     "displayname": member.get("display_name", member["name"]),
                     "avatar": member.get("avatar_url"),
+                    "proxy_avatar": member.get("webhook_avatar_url"),  # PK has separate webhook avatars
                     "description": member.get("description"),
                     "pronouns": member.get("pronouns"),
-                    "color": f"#{member.get('color', '8A2BE2')}",
-                    "proxy": f"{member.get('prefix', '')}TEXT{member.get('suffix', '')}" if member.get('prefix') or member.get('suffix') else None
+                    "color": normalize_color(member.get('color')),
+                    "proxy": proxy_text,
+                    "birthday": member.get("birthday"),  # Import birthday if available
+                    "created_date": member.get("created", datetime.utcnow().isoformat())
                 }
+                
+                system_data["alters"][member["name"]] = alter_data
+                
+                # Add member to appropriate folders based on group membership
+                for group_id, group_members in group_member_map.items():
+                    if member_id in group_members:
+                        # Find the folder name for this group
+                        for folder_name, folder_data in system_data["folders"].items():
+                            # Match by checking if this group was the source
+                            # We'll use a simple approach: add to all matching groups
+                            for group in groups_list:
+                                if group.get("id") == group_id and group.get("name") == folder_name:
+                                    if member["name"] not in folder_data["alters"]:
+                                        folder_data["alters"].append(member["name"])
             
             # Confirmation
+            groups_count = len(groups_list)
+            confirmation_text = f"Found system **{system_info.get('name', 'Unknown')}** with **{len(members_list)}** members"
+            if groups_count > 0:
+                confirmation_text += f" and **{groups_count}** groups (will become folders)"
+            confirmation_text += ".\n\nThis will overwrite your current system data. Are you sure?\n\nReact with ✅ to confirm or ❌ to cancel."
+            
             embed = discord.Embed(
                 title="⚠️ Import PluralKit Data",
-                description="This will overwrite your current system data. Are you sure?\n\nReact with ✅ to confirm or ❌ to cancel.",
+                description=confirmation_text,
                 color=0xFF0000
             )
             message = await ctx.send(embed=embed)
@@ -438,7 +536,11 @@ class SystemCommands(commands.Cog):
                 if str(reaction.emoji) == '✅':
                     # Import the data
                     db.save_profile(user_id, system_data)
-                    await ctx.send("✅ PluralKit data imported successfully!")
+                    success_msg = f"✅ PluralKit data imported successfully! Imported **{len(members_list)}** members"
+                    if groups_count > 0:
+                        success_msg += f" and **{groups_count}** folders"
+                    success_msg += "."
+                    await ctx.send(success_msg)
                 else:
                     await ctx.send("❌ Import cancelled.")
                     
