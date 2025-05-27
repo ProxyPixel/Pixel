@@ -40,7 +40,7 @@ class ProxyCommands(commands.Cog):
     async def initialize_cache(self):
         try:
             # Check if MongoDB collections are available
-            if not db.profiles or not db.autoproxy:
+            if db.profiles is None or db.autoproxy is None:
                 logger.warning("⚠️ MongoDB collections not available - proxy cache initialization skipped")
                 return
                 

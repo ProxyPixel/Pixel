@@ -68,94 +68,90 @@ class MongoDB:
         logger.info("📌 MongoDB collections and indexes initialized.")
 
     def get_profile(self, user_id: str):
-        if not self.profiles:
-            logger.warning("MongoDB not connected: get_profile")
+        if self.db is None or self.profiles is None:
+            logger.warning("Attempted to get_profile but MongoDB is not connected.")
             return None
         return self.profiles.find_one({"user_id": user_id})
 
     def save_profile(self, user_id: str, data: dict) -> None:
-        if not self.profiles:
-            logger.warning("MongoDB not connected: save_profile")
+        if self.db is None or self.profiles is None:
+            logger.warning("Attempted to save_profile but MongoDB is not connected.")
             return
         data["updated_at"] = datetime.utcnow()
         self.profiles.update_one({"user_id": user_id}, {"$set": data}, upsert=True)
 
     def delete_profile(self, user_id: str) -> None:
-        if not self.profiles or not self.autoproxy:
-            logger.warning("MongoDB not connected: delete_profile")
+        if self.db is None or self.profiles is None or self.autoproxy is None:
+            logger.warning("Attempted to delete_profile but MongoDB is not connected.")
             return
         self.profiles.delete_one({"user_id": user_id})
         self.autoproxy.delete_one({"user_id": user_id})
 
     def get_autoproxy(self, user_id: str) -> dict:
-        if not self.autoproxy:
-            logger.warning("MongoDB not connected: get_autoproxy")
+        if self.db is None or self.autoproxy is None:
+            logger.warning("Attempted to get_autoproxy but MongoDB is not connected.")
             return {"mode": "off"}
         result = self.autoproxy.find_one({"user_id": user_id})
         return result if result else {"mode": "off"}
 
     def save_autoproxy(self, user_id: str, settings: dict) -> None:
-        if not self.autoproxy:
-            logger.warning("MongoDB not connected: save_autoproxy")
+        if self.db is None or self.autoproxy is None:
+            logger.warning("Attempted to save_autoproxy but MongoDB is not connected.")
             return
         settings["updated_at"] = datetime.utcnow()
         self.autoproxy.update_one({"user_id": user_id}, {"$set": settings}, upsert=True)
 
     def get_blacklist(self, guild_id: str) -> dict:
-        if not self.blacklists:
-            logger.warning("MongoDB not connected: get_blacklist")
+        if self.db is None or self.blacklists is None:
+            logger.warning("Attempted to get_blacklist but MongoDB is not connected.")
             return {"channels": [], "categories": []}
         result = self.blacklists.find_one({"guild_id": guild_id})
         return result if result else {"channels": [], "categories": []}
 
     def save_blacklist(self, guild_id: str, data: dict) -> None:
-        if not self.blacklists:
-            logger.warning("MongoDB not connected: save_blacklist")
+        if self.db is None or self.blacklists is None:
+            logger.warning("Attempted to save_blacklist but MongoDB is not connected.")
             return
         data["updated_at"] = datetime.utcnow()
         self.blacklists.update_one({"guild_id": guild_id}, {"$set": data}, upsert=True)
 
     def get_webhook(self, channel_id: int, guild_id: int):
-        if not self.webhooks:
-            logger.warning("MongoDB not connected: get_webhook")
+        if self.db is None or self.webhooks is None:
+            logger.warning("Attempted to get_webhook but MongoDB is not connected.")
             return None
         return self.webhooks.find_one({"channel_id": channel_id, "guild_id": guild_id})
 
     def save_webhook(self, channel_id: int, guild_id: int, webhook_id: int, webhook_token: str) -> None:
-        if not self.webhooks:
-            logger.warning("MongoDB not connected: save_webhook")
+        if self.db is None or self.webhooks is None:
+            logger.warning("Attempted to save_webhook but MongoDB is not connected.")
             return
         self.webhooks.update_one(
             {"channel_id": channel_id, "guild_id": guild_id},
-            {"$set": {
-                "webhook_id": webhook_id,
-                "webhook_token": webhook_token,
-                "updated_at": datetime.utcnow()
-            }},
+            {"$set": {"webhook_id": webhook_id, "webhook_token": webhook_token, "updated_at": datetime.utcnow()}},
             upsert=True
         )
 
     def delete_webhook(self, channel_id: int, guild_id: int) -> None:
-        if not self.webhooks:
-            logger.warning("MongoDB not connected: delete_webhook")
+        if self.db is None or self.webhooks is None:
+            logger.warning("Attempted to delete_webhook but MongoDB is not connected.")
             return
         self.webhooks.delete_one({"channel_id": channel_id, "guild_id": guild_id})
 
     def record_switch(self, user_id: str, alter_id: str) -> None:
-        if not self.switches:
-            logger.warning("MongoDB not connected: record_switch")
+        if self.db is None or self.switches is None:
+            logger.warning("Attempted to record_switch but MongoDB is not connected.")
             return
-        self.switches.insert_one({
-            "user_id": user_id,
-            "alter_id": alter_id,
-            "timestamp": datetime.utcnow()
-        })
+        self.switches.insert_one({"user_id": user_id, "alter_id": alter_id, "timestamp": datetime.utcnow()})
 
     def get_recent_switches(self, user_id: str, limit: int = 10) -> list:
-        if not self.switches:
-            logger.warning("MongoDB not connected: get_recent_switches")
+        if self.db is None or self.switches is None:
+            logger.warning("Attempted to get_recent_switches but MongoDB is not connected.")
             return []
-        return list(self.switches.find({"user_id": user_id}).sort("timestamp", -1).limit(limit))
+        return list(
+            self.switches.find({"user_id": user_id})
+                         .sort("timestamp", -1)
+                         .limit(limit)
+        )
 
 # Global instance
 db = MongoDB()
