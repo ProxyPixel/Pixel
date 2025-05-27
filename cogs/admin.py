@@ -10,8 +10,7 @@ def is_admin(ctx):
 class AdminCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        # Ensure MongoDB connection on load
-        db.connect()
+        # MongoDB connection is now handled globally in main.py
 
     @commands.command(name="pixel")
     @commands.check(is_admin)
@@ -32,7 +31,7 @@ class AdminCommands(commands.Cog):
 
         # Database connectivity
         try:
-            db.connect()
+            # MongoDB connection is already established globally
             embed.add_field(name="📊 Database", value="Connected", inline=True)
         except Exception:
             embed.add_field(name="📊 Database", value="Error", inline=True)
@@ -43,38 +42,32 @@ class AdminCommands(commands.Cog):
     @commands.command(name="blacklist_channel")
     @commands.check(is_admin)
     async def blacklist_channel(self, ctx, channel: discord.TextChannel):
-        """Blacklist a channel from proxy detection (admin only)."""
+        """Add a channel to the blacklist (admin only)."""
         guild_id = str(ctx.guild.id)
         entry = db.get_blacklist(guild_id) or {"guild_id": guild_id, "channels": [], "categories": []}
-
-        if channel.id in entry.get("channels", []):
-            return await ctx.send(f"❌ {channel.mention} is already blacklisted.")
-
-        entry.setdefault("channels", []).append(channel.id)
+        
+        if channel.id in entry["channels"]:
+            await ctx.send(f"❌ {channel.mention} is already blacklisted.")
+            return
+        
+        entry["channels"].append(channel.id)
         db.save_blacklist(guild_id, entry)
-        await ctx.send(embed=discord.Embed(
-            title="✅ Channel Blacklisted",
-            description=f"{channel.mention} has been blacklisted from proxy detection.",
-            color=0x8A2BE2
-        ))
+        await ctx.send(f"✅ Added {channel.mention} to the blacklist.")
 
     @commands.command(name="blacklist_category")
     @commands.check(is_admin)
     async def blacklist_category(self, ctx, category: discord.CategoryChannel):
-        """Blacklist an entire category from proxy detection (admin only)."""
+        """Add a category to the blacklist (admin only)."""
         guild_id = str(ctx.guild.id)
         entry = db.get_blacklist(guild_id) or {"guild_id": guild_id, "channels": [], "categories": []}
-
-        if category.id in entry.get("categories", []):
-            return await ctx.send(f"❌ Category '{category.name}' is already blacklisted.")
-
-        entry.setdefault("categories", []).append(category.id)
+        
+        if category.id in entry["categories"]:
+            await ctx.send(f"❌ Category **{category.name}** is already blacklisted.")
+            return
+        
+        entry["categories"].append(category.id)
         db.save_blacklist(guild_id, entry)
-        await ctx.send(embed=discord.Embed(
-            title="✅ Category Blacklisted",
-            description=f"Category '{category.name}' has been blacklisted from proxy detection.",
-            color=0x8A2BE2
-        ))
+        await ctx.send(f"✅ Added category **{category.name}** to the blacklist.")
 
     @commands.command(name="list_blacklists")
     @commands.check(is_admin)
@@ -82,42 +75,36 @@ class AdminCommands(commands.Cog):
         """List all blacklisted channels and categories (admin only)."""
         guild_id = str(ctx.guild.id)
         entry = db.get_blacklist(guild_id) or {"channels": [], "categories": []}
-
-        embed = discord.Embed(title="🚫 Blacklisted Channels & Categories", color=0x8A2BE2)
-        # Channels
-        chans = entry.get("channels", [])
-        if chans:
-            embed.add_field(
-                name="📺 Channels", 
-                value="\n".join(
-                    channel.mention if (channel := self.bot.get_channel(cid)) else f"Unknown ID {cid}" 
-                    for cid in chans
-                ),
-                inline=False
-            )
-        else:
-            embed.add_field(name="📺 Channels", value="None", inline=False)
-        # Categories
-        cats = entry.get("categories", [])
-        if cats:
-            embed.add_field(
-                name="📁 Categories",
-                value="\n".join(
-                    f"{self.bot.get_channel(cid).name}" if self.bot.get_channel(cid) else f"Unknown ID {cid}"
-                    for cid in cats
-                ),
-                inline=False
-            )
-        else:
-            embed.add_field(name="📁 Categories", value="None", inline=False)
-
+        
+        embed = discord.Embed(title="📋 Blacklist Status", color=0x8A2BE2)
+        
+        channels = [ctx.guild.get_channel(ch) for ch in entry.get("channels", [])]
+        channels = [ch.mention for ch in channels if ch]
+        embed.add_field(
+            name="🚫 Blacklisted Channels",
+            value="\n".join(channels) if channels else "None",
+            inline=False
+        )
+        
+        categories = [ctx.guild.get_channel(cat) for cat in entry.get("categories", [])]
+        categories = [cat.name for cat in categories if cat]
+        embed.add_field(
+            name="🚫 Blacklisted Categories", 
+            value="\n".join(categories) if categories else "None",
+            inline=False
+        )
+        
         await ctx.send(embed=embed)
 
     @commands.command(name="admin_commands")
     @commands.check(is_admin)
     async def admin_commands(self, ctx):
-        """Display all admin commands (admin only)."""
-        embed = discord.Embed(title="🔧 Admin Commands", color=0x8A2BE2)
+        """Show available admin commands."""
+        embed = discord.Embed(
+            title="🛡️ Admin Commands",
+            description="Available commands for server administrators",
+            color=0x8A2BE2
+        )
         embed.add_field(
             name="🚫 Blacklist Management",
             value="`!blacklist_channel <channel>`\n`!blacklist_category <category>`\n`!list_blacklists`",
