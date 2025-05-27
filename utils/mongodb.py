@@ -1,3 +1,6 @@
+"""
+Updated: 2025-05-26 Still not connecting.
+"""
 import os
 import logging
 import ssl
@@ -7,7 +10,6 @@ from pymongo import MongoClient
 from pymongo.database import Database
 from pymongo.collection import Collection
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -28,22 +30,24 @@ class MongoDB:
             logger.error("MONGODB_URI environment variable not set")
             return
 
-        # Log OpenSSL version and URI preview
+        # Log OpenSSL and URI preview
         logger.info(f"OpenSSL version: {ssl.OPENSSL_VERSION}")
         logger.info(f"Connecting to MongoDB: {uri[:30]}...{uri[-20:]}")
 
         try:
-            # Use certifi's CA bundle for TLS
+            # Insecure fallback: trust certifi CA but allow invalid certs/hostnames
             tls_ca = certifi.where()
             client = MongoClient(
                 uri,
                 serverSelectionTimeoutMS=10000,
                 tls=True,
-                tlsCAFile=tls_ca
+                tlsCAFile=tls_ca,
+                tlsAllowInvalidCertificates=True,
+                tlsAllowInvalidHostnames=True
             )
             # Verify connection
             client.admin.command("ping")
-            logger.info("Successfully pinged MongoDB admin database.")
+            logger.info("Successfully pinged MongoDB admin database (insecure mode).")
         except Exception as e:
             logger.error(f"Failed to connect to MongoDB: {e}", exc_info=True)
             return
@@ -62,7 +66,7 @@ class MongoDB:
         self.switches = self.db.switches
         self.webhooks = self.db.webhooks
 
-        # Ensure indexes (idempotent)
+        # Ensure indexes
         self.profiles.create_index("user_id", unique=True)
         self.autoproxy.create_index("user_id", unique=True)
         self.blacklists.create_index("guild_id", unique=True)
@@ -127,11 +131,9 @@ class MongoDB:
         if not self.db or not self.webhooks:
             logger.warning("Attempted to save_webhook but MongoDB is not connected.")
             return
-        self.webhooks.update_one(
-            {"channel_id": channel_id, "guild_id": guild_id},
-            {"$set": {"webhook_id": webhook_id, "webhook_token": webhook_token, "updated_at": datetime.utcnow()}},
-            upsert=True
-        )
+        self.webhooks.update_one({"channel_id": channel_id, "guild_id": guild_id},
+                                 {"$set": {"webhook_id": webhook_id, "webhook_token": webhook_token, "updated_at": datetime.utcnow()}},
+                                 upsert=True)
 
     def delete_webhook(self, channel_id: int, guild_id: int) -> None:
         if not self.db or not self.webhooks:
@@ -149,11 +151,7 @@ class MongoDB:
         if not self.db or not self.switches:
             logger.warning("Attempted to get_recent_switches but MongoDB is not connected.")
             return []
-        return list(
-            self.switches.find({"user_id": user_id})
-                         .sort("timestamp", -1)
-                         .limit(limit)
-        )
+        return list(self.switches.find({"user_id": user_id}).sort("timestamp", -1).limit(limit))
 
 # Instantiate global database client
 db = MongoDB()
