@@ -73,10 +73,7 @@ class PixelBot(commands.Bot):
         
     async def setup_hook(self):
         """This is called when the bot starts, before logging in."""
-        # Initialize MongoDB connection
-        logger.info("🔌 Initializing MongoDB connection...")
-        db.connect()
-        
+        # MongoDB connection is now handled in main section before bot startup
         await self.load_extensions()
         
     async def load_extensions(self):
