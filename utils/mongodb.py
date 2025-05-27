@@ -1,6 +1,7 @@
 import os
 import logging
 import ssl
+import certifi
 from datetime import datetime
 from pymongo import MongoClient
 from pymongo.database import Database
@@ -27,13 +28,19 @@ class MongoDB:
             logger.error("MONGODB_URI environment variable not set")
             return
 
-        # Log OpenSSL and URI info
+        # Log OpenSSL version and URI preview
         logger.info(f"OpenSSL version: {ssl.OPENSSL_VERSION}")
         logger.info(f"Connecting to MongoDB: {uri[:30]}...{uri[-20:]}")
 
         try:
-            # Create client with a reasonable server selection timeout
-            client = MongoClient(uri, serverSelectionTimeoutMS=10000)
+            # Use certifi's CA bundle for TLS
+            tls_ca = certifi.where()
+            client = MongoClient(
+                uri,
+                serverSelectionTimeoutMS=10000,
+                tls=True,
+                tlsCAFile=tls_ca
+            )
             # Verify connection
             client.admin.command("ping")
             logger.info("Successfully pinged MongoDB admin database.")
