@@ -212,6 +212,10 @@ if __name__ == "__main__":
     # Start the Flask web server in a separate thread
     threading.Thread(target=run_flask, daemon=True).start()
     
+    # **MUST** connect to MongoDB _before_ loading any commands
+    logger.info("🔌 Connecting to MongoDB before bot startup...")
+    db.connect()
+    
     # Get token
     token = None
     for var in ("DISCORD_TOKEN", "BOT_TOKEN", "NEW_BOT_TOKEN"):
