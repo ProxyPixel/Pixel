@@ -1,13 +1,14 @@
 services:
   - type: web
     name: Pixel        
-    env: python              
+    env: docker
+    dockerfilePath: Dockerfile       
     region: virginia         
     plan: free
     autoDeploy: true
     buildCommand: |
       pip install -r requirements.txt
-      pip install --upgrade certifi # Start: bind to the $PORT that Render provides
+      pip install --upgrade certifi 
     startCommand: |
       uvicorn main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: "/health"
