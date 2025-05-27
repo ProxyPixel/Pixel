@@ -1,10 +1,11 @@
 import discord
 from discord.ext import commands
-from utils.mongodb import db
-from utils.helpers import find_alter_by_name, create_embed
 import asyncio
 import uuid
 from datetime import datetime
+
+from utils.mongodb import db
+from utils.helpers import find_alter_by_name, create_embed
 
 class AlterCommands(commands.Cog):
     def __init__(self, bot):
@@ -12,24 +13,17 @@ class AlterCommands(commands.Cog):
 
     @commands.command(name="create")
     async def create_alter(self, ctx, name: str, pronouns: str = None, *, description: str = None):
-        """Create a new profile."""
-        
+        """Create a new alter profile."""
         user_id = str(ctx.author.id)
 
-        # Get or create profile
-        profile = db.get_profile(user_id)
-        if not profile:
-            profile = {"user_id": user_id, "system": {}, "alters": {}, "folders": {}}
+        # Load or initialize profile
+        profile = db.get_profile(user_id) or {"user_id": user_id, "system": {}, "alters": {}, "folders": {}}
 
         if name in profile["alters"]:
-            await ctx.send(f"❌ An alter with the name **{name}** already exists.")
-            return
+            return await ctx.send(f"❌ An alter named **{name}** already exists.")
 
-        # Generate unique alter ID
         alter_id = str(uuid.uuid4())[:8]
-
         profile["alters"][name] = {
-            "name": name,
             "alter_id": alter_id,
             "displayname": name,
             "pronouns": pronouns,
@@ -43,429 +37,233 @@ class AlterCommands(commands.Cog):
             "created_date": datetime.utcnow().isoformat()
         }
         db.save_profile(user_id, profile)
-        
-        embed = discord.Embed(
+
+        embed = create_embed(
             title="✅ Alter Created Successfully",
-            description=f"Alter **{name}** has been created!\nAlter ID: `{alter_id}`",
-            color=0x8A2BE2
+            description=f"Alter **{name}** has been created!\nID: `{alter_id}`"
         )
         if pronouns:
             embed.add_field(name="Pronouns", value=pronouns, inline=True)
         if description:
             embed.add_field(name="Description", value=description, inline=False)
-            
         await ctx.send(embed=embed)
 
     @commands.command(name="show")
-    async def show_alter(self, ctx, *, name: str):
-        """Show a profile, including avatars, banners, and colors."""
-        
+    async def show_alter(self, ctx, *, query: str):
+        """Display an alter's details."""
         user_id = str(ctx.author.id)
-        
         profile = db.get_profile(user_id)
-        if not profile:
-            await ctx.send("❌ You don't have any alters.")
-            return
+        if not profile or not profile.get("alters"):
+            return await ctx.send("❌ You have no alters. Use `!create <name>` to add one.")
 
-        actual_name = find_alter_by_name(profile, name)
-        if not actual_name:
-            await ctx.send(f"❌ Alter '{name}' does not exist.")
-            return
+        actual = find_alter_by_name(profile, query)
+        if not actual:
+            return await ctx.send(f"❌ Alter '{query}' not found.")
 
-        alter_data = profile["alters"][actual_name]
-        
-        # Helper function to normalize color format
-        def normalize_color(color_str):
-            if not color_str:
-                return 0x8A2BE2  # Default color
-            # Remove # if present and ensure it's a valid hex color
-            color_clean = color_str.replace('#', '') if color_str.startswith('#') else color_str
-            try:
-                # Validate it's a valid hex color
-                return int(color_clean, 16)
-            except ValueError:
-                return 0x8A2BE2  # Default color
-        
-        # Use alter's color or default
-        color = normalize_color(alter_data.get('color'))
-        
-        embed = discord.Embed(
-            title=f"👤 {alter_data.get('displayname', actual_name)}",
-            color=color
-        )
+        data = profile["alters"][actual]
+        color = int(data.get('color', '0x8A2BE2').lstrip('#'), 16) if data.get('color') else 0x8A2BE2
 
-        # Basic info
-        if alter_data.get('pronouns'):
-            embed.add_field(name="🏷️ Pronouns", value=alter_data['pronouns'], inline=True)
-        
-        if alter_data.get('description'):
-            embed.add_field(name="📝 Description", value=alter_data['description'], inline=False)
+        embed = discord.Embed(title=f"👤 {data.get('displayname', actual)}", color=color)
+        if data.get('pronouns'):
+            embed.add_field(name="🏷️ Pronouns", value=data['pronouns'], inline=True)
+        if data.get('description'):
+            embed.add_field(name="📝 Description", value=data['description'], inline=False)
+        if data.get('proxy'):
+            tag = data['proxy'].rstrip('None')
+            embed.add_field(name="🗨️ Proxy Tag", value=f"`{tag}`", inline=True)
+        if data.get('aliases'):
+            embed.add_field(name="🔗 Aliases", value=", ".join(data['aliases']), inline=False)
+        if data.get('color'):
+            embed.add_field(name="🎨 Color", value=data['color'], inline=True)
+        if data.get('avatar'):
+            embed.set_thumbnail(url=data['avatar'])
+        if data.get('banner'):
+            embed.set_image(url=data['banner'])
+        if data.get('proxy_avatar'):
+            embed.add_field(name="🖼️ Proxy Avatar", value="Custom proxy avatar set", inline=True)
 
-        # Proxy info
-        if alter_data.get('proxy'):
-            # Clean up the proxy display - remove None suffixes and show proper format
-            proxy_display = alter_data['proxy']
-            if proxy_display.endswith('None'):
-                proxy_display = proxy_display.replace('None', '')
-            embed.add_field(name="🗨️ Proxy Tags", value=f"`{proxy_display}`", inline=True)
-
-        # Aliases
-        if alter_data.get('aliases'):
-            aliases_text = ", ".join(alter_data['aliases'])
-            embed.add_field(name="🔗 Aliases", value=aliases_text, inline=False)
-
-        # Color
-        if alter_data.get('color'):
-            embed.add_field(name="🎨 Color", value=alter_data['color'], inline=True)
-
-        # Avatar
-        if alter_data.get('avatar'):
-            embed.set_thumbnail(url=alter_data['avatar'])
-
-        # Banner
-        if alter_data.get('banner'):
-            embed.set_image(url=alter_data['banner'])
-
-        # Proxy avatar note
-        if alter_data.get('proxy_avatar'):
-            embed.add_field(name="🖼️ Proxy Avatar", value="Set (different from display avatar)", inline=True)
-
-        embed.set_footer(text=f"Internal name: {actual_name}")
+        embed.set_footer(text=f"Internal key: {actual}")
         await ctx.send(embed=embed)
 
     @commands.command(name="list_profiles")
     async def list_profiles(self, ctx):
-        """List all profiles in the current system with pagination."""
-        
+        """Paginated list of all alters."""
         user_id = str(ctx.author.id)
-
         profile = db.get_profile(user_id)
-        if not profile or not profile.get("alters"):
-            await ctx.send("❌ You don't have any alters. Use `!create <name> <pronouns>` to create one.")
-            return
+        alters = profile.get('alters', {}) if profile else {}
+        if not alters:
+            return await ctx.send("❌ No alters to list.")
 
-        alters = profile["alters"]
-        alter_list = list(alters.items())
-        
-        # Pagination settings
-        per_page = 10  # Show 10 alters per page
-        total_pages = (len(alter_list) + per_page - 1) // per_page
-        current_page = 1
-        
-        def create_page_embed(page_num):
-            start_idx = (page_num - 1) * per_page
-            end_idx = min(start_idx + per_page, len(alter_list))
-            
-            embed = discord.Embed(
+        items = list(alters.items())
+        per_page = 10
+        pages = (len(items) + per_page - 1) // per_page
+        page = 1
+
+        def make_embed(p):
+            start = (p-1)*per_page
+            end = min(start+per_page, len(items))
+            e = create_embed(
                 title="👥 Your Alters",
-                description=f"Total: {len(alters)} alter(s) • Page {page_num}/{total_pages}",
-                color=0x8A2BE2
+                description=f"Total: {len(items)} • Page {p}/{pages}"
             )
-
-            for i in range(start_idx, end_idx):
-                name, data = alter_list[i]
-                display_name = data.get('displayname') or name
-                pronouns = data.get('pronouns') or 'Not set'
-                proxy_info = f" • Proxy: `{data['proxy']}`" if data.get('proxy') else ""
-                
-                embed.add_field(
-                    name=f"{i + 1}. {display_name}",
-                    value=f"Pronouns: {pronouns}{proxy_info}",
+            for i, (name, d) in enumerate(items[start:end], start+1):
+                alias_info = f" • Aliases: {len(d.get('aliases', []))}" if d.get('aliases') else ""
+                e.add_field(
+                    name=f"{i}. {d.get('displayname', name)}",
+                    value=f"Pronouns: {d.get('pronouns','Not set')}{alias_info}",
                     inline=False
                 )
-            
-            if total_pages > 1:
-                embed.set_footer(text=f"Use ⬅️ and ➡️ to navigate pages")
-            
-            return embed
+            if pages > 1:
+                e.set_footer(text="Use ⬅️ and ➡️ to navigate.")
+            return e
 
-        # Send initial embed
-        embed = create_page_embed(current_page)
-        message = await ctx.send(embed=embed)
-        
-        # Add reactions for pagination if there are multiple pages AND we're in a guild
-        if total_pages > 1 and ctx.guild:
-            await message.add_reaction('⬅️')
-            await message.add_reaction('➡️')
-            
-            def check(reaction, user):
-                return (user == ctx.author and 
-                       reaction.message.id == message.id and 
-                       str(reaction.emoji) in ['⬅️', '➡️'])
-            
-            # Handle pagination
+        msg = await ctx.send(embed=make_embed(page))
+        if pages > 1 and ctx.guild:
+            await msg.add_reaction('⬅️'); await msg.add_reaction('➡️')
+            def check(r,u): return u==ctx.author and r.message.id==msg.id and str(r.emoji) in ['⬅️','➡️']
             while True:
                 try:
-                    reaction, user = await self.bot.wait_for('reaction_add', timeout=60.0, check=check)
-                    
-                    if str(reaction.emoji) == '⬅️' and current_page > 1:
-                        current_page -= 1
-                    elif str(reaction.emoji) == '➡️' and current_page < total_pages:
-                        current_page += 1
-                    else:
-                        # Remove the reaction if it's invalid
-                        try:
-                            await message.remove_reaction(reaction.emoji, user)
-                        except discord.Forbidden:
-                            pass  # Can't remove reactions in DMs
-                        continue
-                    
-                    # Update the embed
-                    new_embed = create_page_embed(current_page)
-                    await message.edit(embed=new_embed)
-                    
-                    # Remove the user's reaction
-                    try:
-                        await message.remove_reaction(reaction.emoji, user)
-                    except discord.Forbidden:
-                        pass  # Can't remove reactions in DMs
-                    
+                    r, _ = await self.bot.wait_for('reaction_add', timeout=60.0, check=check)
+                    if str(r.emoji)=='⬅️' and page>1: page-=1
+                    elif str(r.emoji)=='➡️' and page<pages: page+=1
+                    await msg.edit(embed=make_embed(page))
+                    await msg.remove_reaction(r.emoji, r.user)
                 except asyncio.TimeoutError:
-                    # Remove reactions when timeout
-                    try:
-                        await message.clear_reactions()
-                    except:
-                        pass
+                    try: await msg.clear_reactions()
+                    except: pass
                     break
-        elif total_pages > 1:
-            # In DMs, just send a message about using page numbers
-            await ctx.send(f"📄 This list has {total_pages} pages. Since this is a DM, reactions aren't available. You can use `!list_profiles` again to see the first page.")
+        elif pages>1:
+            await ctx.send(f"📄 {pages} pages. Use in-server for reactions.")
 
     @commands.command(name="edit")
-    async def edit_alter(self, ctx, *, name: str):
-        """Edit an existing profile (name, displayname, pronouns, description, avatar, banner, proxy, color, proxy avatar)."""
-        
+    async def edit_alter(self, ctx, *, query: str):
+        """Interactive edit of alter fields."""
         user_id = str(ctx.author.id)
-        
         profile = db.get_profile(user_id)
         if not profile:
-            await ctx.send("❌ You don't have any alters.")
-            return
+            return await ctx.send("❌ No alters to edit.")
+        actual = find_alter_by_name(profile, query)
+        if not actual:
+            return await ctx.send(f"❌ Alter '{query}' not found.")
 
-        actual_name = find_alter_by_name(profile, name)
-        if not actual_name:
-            await ctx.send(f"❌ Alter '{name}' does not exist.")
-            return
-
-        embed = discord.Embed(
-            title=f"⚙️ Edit {actual_name}",
-            description="React with the corresponding emoji to edit that field:",
-            color=0x8A2BE2
+        options = ['🏷️','👤','📝','🖼️','🎨','🗨️','🌈','👥']
+        actions = {'🏷️':'displayname','👤':'pronouns','📝':'description','🖼️':'avatar','🎨':'banner','🗨️':'proxy','🌈':'color','👥':'proxy_avatar'}
+        embed = create_embed(
+            title=f"⚙️ Edit {actual}",
+            description="React with emoji for field:"
         )
-        embed.add_field(name="🏷️ Display Name", value="Edit display name", inline=True)
-        embed.add_field(name="👤 Pronouns", value="Edit pronouns", inline=True)
-        embed.add_field(name="📝 Description", value="Edit description", inline=True)
-        embed.add_field(name="🖼️ Avatar", value="Edit avatar URL", inline=True)
-        embed.add_field(name="🎨 Banner", value="Edit banner URL", inline=True)
-        embed.add_field(name="🗨️ Proxy", value="Edit proxy tags", inline=True)
-        embed.add_field(name="🌈 Color", value="Edit color (hex)", inline=True)
-        embed.add_field(name="👥 Proxy Avatar", value="Edit proxy avatar", inline=True)
+        names = {'🏷️':'Display Name','👤':'Pronouns','📝':'Description','🖼️':'Avatar','🎨':'Banner','🗨️':'Proxy Tag','🌈':'Color','👥':'Proxy Avatar'}
+        for em in options: embed.add_field(name=em, value=names[em], inline=True)
+        msg = await ctx.send(embed=embed)
+        for em in options: await msg.add_reaction(em)
 
-        message = await ctx.send(embed=embed)
-        
-        # Add reaction emojis
-        reactions = ['🏷️', '👤', '📝', '🖼️', '🎨', '🗨️', '🌈', '👥']
-        for reaction in reactions:
-            await message.add_reaction(reaction)
-
-        def check(reaction, user):
-            return user == ctx.author and reaction.message.id == message.id and str(reaction.emoji) in reactions
-
+        def check(r,u): return u==ctx.author and r.message.id==msg.id and str(r.emoji) in options
         try:
-            reaction, user = await self.bot.wait_for('reaction_add', timeout=60.0, check=check)
-            
-            if str(reaction.emoji) == '🏷️':
-                await self._edit_alter_field(ctx, actual_name, 'displayname', 'Enter the new display name:')
-            elif str(reaction.emoji) == '👤':
-                await self._edit_alter_field(ctx, actual_name, 'pronouns', 'Enter the new pronouns:')
-            elif str(reaction.emoji) == '📝':
-                await self._edit_alter_field(ctx, actual_name, 'description', 'Enter the new description:')
-            elif str(reaction.emoji) == '🖼️':
-                await self._edit_alter_field(ctx, actual_name, 'avatar', 'Enter the new avatar URL:')
-            elif str(reaction.emoji) == '🎨':
-                await self._edit_alter_field(ctx, actual_name, 'banner', 'Enter the new banner URL:')
-            elif str(reaction.emoji) == '🗨️':
-                await self._edit_alter_field(ctx, actual_name, 'proxy', 'Enter the new proxy tags (e.g., "A: TEXT" or "TEXT :a"):')
-            elif str(reaction.emoji) == '🌈':
-                await self._edit_alter_field(ctx, actual_name, 'color', 'Enter the new color (hex format, e.g., #FF5733):')
-            elif str(reaction.emoji) == '👥':
-                await self._edit_alter_field(ctx, actual_name, 'proxy_avatar', 'Enter the new proxy avatar URL:')
-
-        except asyncio.TimeoutError:
-            await ctx.send("⏰ Edit menu timed out.")
-
-    async def _edit_alter_field(self, ctx, alter_name, field, prompt):
-        """Helper function to edit a specific alter field."""
-        await ctx.send(prompt)
-        
-        def check(msg):
-            return msg.author == ctx.author and msg.channel == ctx.channel
-
-        try:
-            response = await self.bot.wait_for('message', timeout=60.0, check=check)
-            user_id = str(ctx.author.id)
-            
-            profile = db.get_profile(user_id)
-            if not profile:
-                await ctx.send("❌ Alter not found.")
-                return
-
-            if field == 'color':
-                # Validate hex color
-                color_value = response.content.strip()
-                # Allow colors with or without # prefix
-                if not color_value.startswith('#'):
-                    color_value = '#' + color_value
-                
-                # Validate hex color format
-                if not color_value.startswith('#') or len(color_value) != 7:
-                    await ctx.send("❌ Invalid color format. Please use hex format like #FF5733 or FF5733")
-                    return
-                
-                # Validate it's actually a valid hex color
-                try:
-                    int(color_value[1:], 16)  # Test if it's valid hex
-                except ValueError:
-                    await ctx.send("❌ Invalid hex color. Please use valid hex characters (0-9, A-F)")
-                    return
-                    
-                profile["alters"][alter_name][field] = color_value
-            else:
-                profile["alters"][alter_name][field] = response.content.strip()
-            
-            db.save_profile(user_id, profile)
-            await ctx.send(f"✅ {field.title()} updated successfully!")
-            
+            r,_ = await self.bot.wait_for('reaction_add', timeout=60.0, check=check)
+            field = actions[str(r.emoji)]
+            await self._edit_field(ctx, user_id, actual, field)
         except asyncio.TimeoutError:
             await ctx.send("⏰ Edit timed out.")
 
+    async def _edit_field(self, ctx, user_id: str, alter: str, field: str):
+        prompts = {
+            'displayname':'Enter new display name:',
+            'pronouns':'Enter new pronouns:',
+            'description':'Enter new description:',
+            'avatar':'Enter new avatar URL:',
+            'banner':'Enter new banner URL:',
+            'proxy':'Enter new proxy tag:',
+            'color':'Enter new color (hex):',
+            'proxy_avatar':'Enter new proxy avatar URL:'
+        }
+        await ctx.send(prompts[field])
+        def mcheck(m): return m.author.id==int(user_id) and m.channel==ctx.channel
+        try:
+            m = await self.bot.wait_for('message', timeout=60.0, check=mcheck)
+            profile = db.get_profile(user_id)
+            data = profile['alters'][alter]
+            val = m.content.strip()
+            if field=='color':
+                if not val.startswith('#'): val='#'+val
+                if len(val)!=7 or not all(c in '0123456789abcdefABCDEF' for c in val[1:]):
+                    return await ctx.send("❌ Invalid hex color.")
+            data[field] = val
+            db.save_profile(user_id, profile)
+            await ctx.send(f"✅ {field.title()} updated.")
+        except asyncio.TimeoutError:
+            await ctx.send("⏰ Update timed out.")
+
     @commands.command(name="delete")
-    async def delete_alter(self, ctx, *, name: str):
+    async def delete_alter(self, ctx, *, query: str):
         """Delete an alter permanently."""
-        
         user_id = str(ctx.author.id)
-        
         profile = db.get_profile(user_id)
         if not profile:
-            await ctx.send("❌ You don't have any alters.")
-            return
+            return await ctx.send("❌ No alters to delete.")
+        actual = find_alter_by_name(profile, query)
+        if not actual:
+            return await ctx.send(f"❌ Alter '{query}' not found.")
 
-        actual_name = find_alter_by_name(profile, name)
-        if not actual_name:
-            await ctx.send(f"❌ Alter '{name}' does not exist.")
-            return
-
-        # Confirmation
-        embed = discord.Embed(
+        embed = create_embed(
             title="⚠️ Delete Alter",
-            description=f"Are you sure you want to delete **{actual_name}**? This action cannot be undone.\n\nReact with ✅ to confirm or ❌ to cancel.",
-            color=0xFF0000
+            description=f"React ✅ to confirm deletion of **{actual}**, or ❌ to cancel."
         )
-        message = await ctx.send(embed=embed)
-        
-        await message.add_reaction('✅')
-        await message.add_reaction('❌')
-
-        def check(reaction, user):
-            return user == ctx.author and reaction.message.id == message.id and str(reaction.emoji) in ['✅', '❌']
-
+        msg = await ctx.send(embed=embed)
+        await msg.add_reaction('✅'); await msg.add_reaction('❌')
+        def c(r,u): return u==ctx.author and r.message.id==msg.id and str(r.emoji) in ['✅','❌']
         try:
-            reaction, user = await self.bot.wait_for('reaction_add', timeout=60.0, check=check)
-            
-            if str(reaction.emoji) == '✅':
-                # Delete the alter
-                del profile["alters"][actual_name]
+            r,_ = await self.bot.wait_for('reaction_add', timeout=60.0, check=c)
+            if str(r.emoji)=='✅':
+                del profile['alters'][actual]
                 db.save_profile(user_id, profile)
-                await ctx.send(f"✅ Alter **{actual_name}** has been deleted.")
+                await ctx.send(f"✅ Alter **{actual}** deleted.")
             else:
                 await ctx.send("❌ Deletion cancelled.")
-                
         except asyncio.TimeoutError:
-            await ctx.send("⏰ Deletion timed out.")
+            await ctx.send("⏰ Timed out.")
 
     @commands.command(name="alias")
-    async def add_alias(self, ctx, name: str, *, alias: str):
-        """Add an alias for an alter."""
-        
+    async def add_alias(self, ctx, query: str, *, alias: str):
+        """Add an alias to an alter."""
         user_id = str(ctx.author.id)
-        
         profile = db.get_profile(user_id)
-        if not profile:
-            await ctx.send("❌ You don't have any alters.")
-            return
-
-        actual_name = find_alter_by_name(profile, name)
-        if not actual_name:
-            await ctx.send(f"❌ Alter '{name}' does not exist.")
-            return
-
-        # Check if alias already exists
-        if alias in profile["alters"][actual_name].get("aliases", []):
-            await ctx.send(f"❌ Alias '{alias}' already exists for {actual_name}.")
-            return
-
-        # Add the alias
-        if "aliases" not in profile["alters"][actual_name]:
-            profile["alters"][actual_name]["aliases"] = []
-        profile["alters"][actual_name]["aliases"].append(alias)
+        actual = find_alter_by_name(profile, query) if profile else None
+        if not actual:
+            return await ctx.send(f"❌ Alter '{query}' not found.")
+        aliases = profile['alters'][actual].setdefault('aliases', [])
+        if alias in aliases:
+            return await ctx.send(f"❌ Alias '{alias}' already exists.")
+        aliases.append(alias)
         db.save_profile(user_id, profile)
-        
-        await ctx.send(f"✅ Added alias '{alias}' for {actual_name}.")
+        await ctx.send(f"✅ Alias '{alias}' added to **{actual}**.")
 
     @commands.command(name="remove_alias")
-    async def remove_alias(self, ctx, name: str, *, alias: str):
+    async def remove_alias(self, ctx, query: str, *, alias: str):
         """Remove an alias from an alter."""
-        
         user_id = str(ctx.author.id)
-        
         profile = db.get_profile(user_id)
-        if not profile:
-            await ctx.send("❌ You don't have any alters.")
-            return
-
-        actual_name = find_alter_by_name(profile, name)
-        if not actual_name:
-            await ctx.send(f"❌ Alter '{name}' does not exist.")
-            return
-
-        # Check if alias exists
-        if alias not in profile["alters"][actual_name].get("aliases", []):
-            await ctx.send(f"❌ Alias '{alias}' does not exist for {actual_name}.")
-            return
-
-        # Remove the alias
-        profile["alters"][actual_name]["aliases"].remove(alias)
+        actual = find_alter_by_name(profile, query) if profile else None
+        if not actual:
+            return await ctx.send(f"❌ Alter '{query}' not found.")
+        aliases = profile['alters'][actual].get('aliases', [])
+        if alias not in aliases:
+            return await ctx.send(f"❌ Alias '{alias}' not found.")
+        aliases.remove(alias)
         db.save_profile(user_id, profile)
-        
-        await ctx.send(f"✅ Removed alias '{alias}' from {actual_name}.")
+        await ctx.send(f"✅ Alias '{alias}' removed from **{actual}**.")
 
     @commands.command(name="proxyavatar")
-    async def set_proxy_avatar(self, ctx, name: str, *, avatar_url: str = None):
-        """Set a different avatar for proxying (or clear it)."""
-        
+    async def set_proxy_avatar(self, ctx, query: str, *, url: str = None):
+        """Set or clear a proxy avatar for an alter."""
         user_id = str(ctx.author.id)
-        
         profile = db.get_profile(user_id)
-        if not profile:
-            await ctx.send("❌ You don't have any alters.")
-            return
-
-        actual_name = find_alter_by_name(profile, name)
-        if not actual_name:
-            await ctx.send(f"❌ Alter '{name}' does not exist.")
-            return
-
-        if avatar_url and avatar_url.strip():
-            # Setting a proxy avatar
-            profile["alters"][actual_name]["proxy_avatar"] = avatar_url.strip()
-            await ctx.send(f"✅ Set proxy avatar for {actual_name}.")
-        else:
-            # Clearing proxy avatar (no URL provided or empty string)
-            profile["alters"][actual_name]["proxy_avatar"] = None
-            await ctx.send(f"✅ Cleared proxy avatar for {actual_name}.")
-            
+        actual = find_alter_by_name(profile, query) if profile else None
+        if not actual:
+            return await ctx.send(f"❌ Alter '{query}' not found.")
+        profile['alters'][actual]['proxy_avatar'] = url.strip() if url else None
         db.save_profile(user_id, profile)
+        action = 'Set' if url else 'Cleared'
+        await ctx.send(f"✅ {action} proxy avatar for **{actual}**.")
 
 async def setup(bot):
-    """Set up the alters cog."""
     await bot.add_cog(AlterCommands(bot))

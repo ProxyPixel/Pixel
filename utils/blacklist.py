@@ -1,56 +1,35 @@
-import json
-import os
+from typing import List
+from utils.mongodb import db
 
-# Directory for all data files
-DATA_DIR = "data"
-if not os.path.exists(DATA_DIR):
-    os.makedirs(DATA_DIR)
 
-# Path definitions
-CATEGORY_BLACKLIST_FILE = os.path.join(DATA_DIR, "category_blacklist.json")
-CHANNEL_BLACKLIST_FILE = os.path.join(DATA_DIR, "channel_blacklist.json")
+def load_channel_blacklist(guild_id: str) -> List[str]:
+    """Return list of blacklisted channel IDs for the given guild from MongoDB."""
+    bl = db.get_blacklist(guild_id)
+    return bl.get("channels", [])
 
-def load_category_blacklist():
-    """Loads the category blacklist from a JSON file."""
-    if not os.path.exists(CATEGORY_BLACKLIST_FILE):
-        with open(CATEGORY_BLACKLIST_FILE, "w") as f:
-            json.dump([], f)
 
-    try:
-        with open(CATEGORY_BLACKLIST_FILE, "r") as f:
-            return json.load(f)
-    except json.JSONDecodeError:
-        print("⚠️ Error: category_blacklist.json is corrupted. Resetting file.")
-        return []
+def save_channel_blacklist(guild_id: str, channels: List[str]) -> None:
+    """Save list of blacklisted channel IDs for the given guild to MongoDB."""
+    bl = db.get_blacklist(guild_id)
+    # preserve existing categories
+    categories = bl.get("categories", [])
+    db.save_blacklist(guild_id, {"channels": channels, "categories": categories})
 
-def save_category_blacklist(data):
-    """Saves the category blacklist to a JSON file."""
-    with open(CATEGORY_BLACKLIST_FILE, "w") as f:
-        json.dump(data, f, indent=4)
 
-def load_channel_blacklist():
-    """Loads the channel blacklist from a JSON file."""
-    if not os.path.exists(CHANNEL_BLACKLIST_FILE):
-        with open(CHANNEL_BLACKLIST_FILE, "w") as f:
-            json.dump([], f)
+def load_category_blacklist(guild_id: str) -> List[str]:
+    """Return list of blacklisted category IDs for the given guild from MongoDB."""
+    bl = db.get_blacklist(guild_id)
+    return bl.get("categories", [])
 
-    try:
-        with open(CHANNEL_BLACKLIST_FILE, "r") as f:
-            return json.load(f)
-    except json.JSONDecodeError:
-        print("⚠️ Error: channel_blacklist.json is corrupted. Resetting file.")
-        return []
 
-def save_channel_blacklist(data):
-    """Saves the channel blacklist to a JSON file."""
-    with open(CHANNEL_BLACKLIST_FILE, "w") as f:
-        json.dump(data, f, indent=4)
+def save_category_blacklist(guild_id: str, categories: List[str]) -> None:
+    """Save list of blacklisted category IDs for the given guild to MongoDB."""
+    bl = db.get_blacklist(guild_id)
+    # preserve existing channels
+    channels = bl.get("channels", [])
+    db.save_blacklist(guild_id, {"channels": channels, "categories": categories})
 
-# Legacy function names for compatibility
-def load_blacklist():
-    """Legacy function - loads channel blacklist."""
-    return load_channel_blacklist()
 
-def save_blacklist(data):
-    """Legacy function - saves channel blacklist."""
-    return save_channel_blacklist(data)
+# Legacy aliases for channel-based blacklist
+load_blacklist = load_channel_blacklist
+save_blacklist = save_channel_blacklist
