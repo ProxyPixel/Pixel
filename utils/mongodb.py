@@ -1,12 +1,10 @@
-"""
-Updated: 2025-05-26 Still not connecting.
-"""
 import os
 import logging
 import ssl
 import certifi
 from datetime import datetime
 from pymongo import MongoClient
+from pymongo.server_api import ServerApi
 from pymongo.database import Database
 from pymongo.collection import Collection
 
@@ -30,34 +28,32 @@ class MongoDB:
             logger.error("MONGODB_URI environment variable not set")
             return
 
-        # Log OpenSSL and URI preview
         logger.info(f"OpenSSL version: {ssl.OPENSSL_VERSION}")
         logger.info(f"Connecting to MongoDB: {uri[:30]}...{uri[-20:]}")
 
         try:
-            # Insecure fallback: trust certifi CA but allow invalid certs/hostnames
             tls_ca = certifi.where()
-            client = MongoClient(
+            self.client = MongoClient(
                 uri,
+                server_api=ServerApi('1'),
                 serverSelectionTimeoutMS=10000,
                 tls=True,
                 tlsCAFile=tls_ca,
                 tlsAllowInvalidCertificates=True,
                 tlsAllowInvalidHostnames=True
             )
-            # Verify connection
-            client.admin.command("ping")
-            logger.info("Successfully pinged MongoDB admin database (insecure mode).")
+
+            self.client.admin.command("ping")
+            logger.info("✅ Successfully pinged MongoDB admin database.")
         except Exception as e:
-            logger.error(f"Failed to connect to MongoDB: {e}", exc_info=True)
+            logger.error("❌ Failed to connect to MongoDB:", exc_info=True)
             return
 
-        # Assign client and select database
-        self.client = client
-        default_db = client.get_default_database()
+        # Select database
+        default_db = self.client.get_default_database()
         db_name = default_db.name if default_db else "pixeldata"
-        self.db = client[db_name]
-        logger.info(f"Using database: '{self.db.name}'")
+        self.db = self.client[db_name]
+        logger.info(f"📦 Using database: '{self.db.name}'")
 
         # Initialize collections
         self.profiles = self.db.profiles
@@ -71,7 +67,7 @@ class MongoDB:
         self.autoproxy.create_index("user_id", unique=True)
         self.blacklists.create_index("guild_id", unique=True)
         self.webhooks.create_index([("channel_id", 1), ("guild_id", 1)], unique=True)
-        logger.info("MongoDB collections and indexes initialized.")
+        logger.info("📌 MongoDB collections and indexes initialized.")
 
     def get_profile(self, user_id: str):
         if not self.db or not self.profiles:
@@ -131,9 +127,15 @@ class MongoDB:
         if not self.db or not self.webhooks:
             logger.warning("Attempted to save_webhook but MongoDB is not connected.")
             return
-        self.webhooks.update_one({"channel_id": channel_id, "guild_id": guild_id},
-                                 {"$set": {"webhook_id": webhook_id, "webhook_token": webhook_token, "updated_at": datetime.utcnow()}},
-                                 upsert=True)
+        self.webhooks.update_one(
+            {"channel_id": channel_id, "guild_id": guild_id},
+            {"$set": {
+                "webhook_id": webhook_id,
+                "webhook_token": webhook_token,
+                "updated_at": datetime.utcnow()
+            }},
+            upsert=True
+        )
 
     def delete_webhook(self, channel_id: int, guild_id: int) -> None:
         if not self.db or not self.webhooks:
@@ -145,7 +147,11 @@ class MongoDB:
         if not self.db or not self.switches:
             logger.warning("Attempted to record_switch but MongoDB is not connected.")
             return
-        self.switches.insert_one({"user_id": user_id, "alter_id": alter_id, "timestamp": datetime.utcnow()})
+        self.switches.insert_one({
+            "user_id": user_id,
+            "alter_id": alter_id,
+            "timestamp": datetime.utcnow()
+        })
 
     def get_recent_switches(self, user_id: str, limit: int = 10) -> list:
         if not self.db or not self.switches:
@@ -153,5 +159,5 @@ class MongoDB:
             return []
         return list(self.switches.find({"user_id": user_id}).sort("timestamp", -1).limit(limit))
 
-# Instantiate global database client
+# Create global instance
 db = MongoDB()
