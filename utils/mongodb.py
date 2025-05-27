@@ -67,10 +67,32 @@ class MongoDB:
                     "retryWrites": True,
                     "retryReads": True
                 },
-                # Configuration 3: SSL with custom context
+                # Configuration 3: TLS with insecure settings for problematic environments
+                {
+                    "tls": True,
+                    "tlsInsecure": True,
+                    "serverSelectionTimeoutMS": 30000,
+                    "connectTimeoutMS": 30000,
+                    "socketTimeoutMS": 30000,
+                    "maxPoolSize": 20,
+                    "retryWrites": True,
+                    "retryReads": True
+                },
+                # Configuration 4: Legacy SSL approach
                 {
                     "ssl": True,
                     "ssl_cert_reqs": ssl.CERT_NONE,
+                    "serverSelectionTimeoutMS": 30000,
+                    "connectTimeoutMS": 30000,
+                    "socketTimeoutMS": 30000,
+                    "maxPoolSize": 20,
+                    "retryWrites": True,
+                    "retryReads": True
+                },
+                # Configuration 5: Minimal TLS for maximum compatibility
+                {
+                    "tls": True,
+                    "tlsCAFile": None,
                     "serverSelectionTimeoutMS": 30000,
                     "connectTimeoutMS": 30000,
                     "socketTimeoutMS": 30000,
@@ -84,7 +106,20 @@ class MongoDB:
             for i, config in enumerate(connection_configs, 1):
                 try:
                     logger.info(f"Trying MongoDB connection configuration {i}/{len(connection_configs)}")
-                    self.client = MongoClient(uri, **config)
+                    
+                    # Handle legacy SSL configuration separately to avoid parameter errors
+                    if config.get("ssl") and "ssl_cert_reqs" in config:
+                        # Create a copy without the problematic parameter for newer PyMongo versions
+                        config_copy = config.copy()
+                        try:
+                            self.client = MongoClient(uri, **config_copy)
+                        except Exception as ssl_error:
+                            # If ssl_cert_reqs fails, try without it
+                            logger.warning(f"SSL cert parameter failed, trying without: {ssl_error}")
+                            config_copy.pop("ssl_cert_reqs", None)
+                            self.client = MongoClient(uri, **config_copy)
+                    else:
+                        self.client = MongoClient(uri, **config)
                     
                     # Test the connection by pinging the admin database
                     self.client.admin.command('ping')
