@@ -8,8 +8,10 @@ import logging
 import uuid
 from dotenv import load_dotenv
 from discord.ext import commands, tasks
-from flask import Flask
+from flask import Flask, jsonify
 from datetime import datetime
+
+from utils.mongodb import db
 
 # Set up logging
 logging.basicConfig(
@@ -71,6 +73,10 @@ class PixelBot(commands.Bot):
         
     async def setup_hook(self):
         """This is called when the bot starts, before logging in."""
+        # Initialize MongoDB connection
+        logger.info("🔌 Initializing MongoDB connection...")
+        db.connect()
+        
         await self.load_extensions()
         
     async def load_extensions(self):
