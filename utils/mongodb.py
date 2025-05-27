@@ -38,25 +38,67 @@ class MongoDB:
             logger.error("MONGODB_URI environment variable not set")
             # Raise an error or handle as appropriate for your application
             # For now, this will cause self.db and collections to remain None
-            return 
+            return
 
         try:
             logger.info(f"Attempting to connect to MongoDB with URI: {uri[:uri.find(':')+3]}...{uri[-20:]}")
 
-            self.client = MongoClient(
-                uri,
-                tls=True,  # Use tls=True instead of ssl_context
-                serverSelectionTimeoutMS=30000,
-                connectTimeoutMS=30000,
-                socketTimeoutMS=30000,
-                maxPoolSize=20,
-                retryWrites=True,
-                retryReads=True
-            )
+            # Try multiple connection configurations for better compatibility
+            connection_configs = [
+                # Configuration 1: Standard TLS with cert verification disabled (for Render)
+                {
+                    "tls": True,
+                    "tlsAllowInvalidCertificates": True,
+                    "tlsAllowInvalidHostnames": True,
+                    "serverSelectionTimeoutMS": 30000,
+                    "connectTimeoutMS": 30000,
+                    "socketTimeoutMS": 30000,
+                    "maxPoolSize": 20,
+                    "retryWrites": True,
+                    "retryReads": True
+                },
+                # Configuration 2: Standard TLS
+                {
+                    "tls": True,
+                    "serverSelectionTimeoutMS": 30000,
+                    "connectTimeoutMS": 30000,
+                    "socketTimeoutMS": 30000,
+                    "maxPoolSize": 20,
+                    "retryWrites": True,
+                    "retryReads": True
+                },
+                # Configuration 3: SSL with custom context
+                {
+                    "ssl": True,
+                    "ssl_cert_reqs": ssl.CERT_NONE,
+                    "serverSelectionTimeoutMS": 30000,
+                    "connectTimeoutMS": 30000,
+                    "socketTimeoutMS": 30000,
+                    "maxPoolSize": 20,
+                    "retryWrites": True,
+                    "retryReads": True
+                }
+            ]
+
+            last_error = None
+            for i, config in enumerate(connection_configs, 1):
+                try:
+                    logger.info(f"Trying MongoDB connection configuration {i}/{len(connection_configs)}")
+                    self.client = MongoClient(uri, **config)
+                    
+                    # Test the connection by pinging the admin database
+                    self.client.admin.command('ping')
+                    logger.info("Successfully pinged MongoDB admin database.")
+                    break
+                    
+                except Exception as e:
+                    last_error = e
+                    logger.warning(f"Configuration {i} failed: {str(e)}")
+                    self.client = None
+                    continue
             
-            # Test the connection by pinging the admin database
-            self.client.admin.command('ping')
-            logger.info("Successfully pinged MongoDB admin database.")
+            if self.client is None:
+                raise last_error or Exception("All connection configurations failed")
             
             self.db = self.client.pixel_bot
             logger.info(f"Connected to database: {self.db.name}")
