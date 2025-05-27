@@ -42,24 +42,32 @@ class MongoDB:
 
         try:
             logger.info(f"Attempting to connect to MongoDB with URI: {uri[:uri.find(':')+3]}...{uri[-20:]}")
+            
+            # Check if we're running on Render
+            is_render = os.getenv("RENDER") is not None or os.getenv("RENDER_SERVICE_ID") is not None
+            logger.info(f"Running on Render: {is_render}")
 
             # Try multiple connection configurations for better compatibility
             connection_configs = [
-                # Configuration 1: Standard TLS with cert verification disabled (for Render)
+                # Configuration 1: Render-optimized with disabled SSL verification
                 {
                     "tls": True,
                     "tlsAllowInvalidCertificates": True,
                     "tlsAllowInvalidHostnames": True,
-                    "serverSelectionTimeoutMS": 30000,
-                    "connectTimeoutMS": 30000,
-                    "socketTimeoutMS": 30000,
-                    "maxPoolSize": 20,
+                    "tlsInsecure": True,
+                    "serverSelectionTimeoutMS": 10000,  # Shorter timeout for Render
+                    "connectTimeoutMS": 10000,
+                    "socketTimeoutMS": 10000,
+                    "maxPoolSize": 10,  # Smaller pool for free tier
                     "retryWrites": True,
-                    "retryReads": True
+                    "retryReads": True,
+                    "directConnection": False
                 },
-                # Configuration 2: Standard TLS
+                # Configuration 2: Standard TLS with cert verification disabled (for Render)
                 {
                     "tls": True,
+                    "tlsAllowInvalidCertificates": True,
+                    "tlsAllowInvalidHostnames": True,
                     "serverSelectionTimeoutMS": 30000,
                     "connectTimeoutMS": 30000,
                     "socketTimeoutMS": 30000,

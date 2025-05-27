@@ -5,6 +5,7 @@ services:
     region: virginia
     buildCommand: |
       pip install -r requirements.txt
+      pip install --upgrade certifi
     startCommand: |
       python3 main.py
     envVars:
@@ -12,6 +13,12 @@ services:
         sync: false  
       - key: MONGODB_URI
         sync: false
+      - key: PYTHONHTTPSVERIFY
+        value: "0"
+      - key: SSL_CERT_FILE
+        value: ""
+      - key: REQUESTS_CA_BUNDLE
+        value: ""
     plan: free
     healthCheckPath: "/health"
     autoDeploy: true
